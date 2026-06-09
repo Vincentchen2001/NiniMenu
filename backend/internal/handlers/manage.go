@@ -62,13 +62,18 @@ func DeleteQuote(c *gin.Context) {
 }
 
 func GetAchievements(c *gin.Context) {
-	services.SyncAutoAchievements()
+	achievementsEnabled := services.AutoAchievementsEnabled()
+	if achievementsEnabled {
+		services.SyncAutoAchievements()
+	}
 
 	var achievements []models.Achievement
 	database.DB.Order("id ASC").Find(&achievements)
 
 	var unlocked []models.UserAchievement
-	database.DB.Find(&unlocked)
+	if achievementsEnabled {
+		database.DB.Find(&unlocked)
+	}
 
 	unlockedMap := make(map[uint]bool)
 	unlockedAtMap := make(map[uint]time.Time)

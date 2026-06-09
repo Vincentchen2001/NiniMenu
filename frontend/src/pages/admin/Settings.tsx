@@ -49,6 +49,9 @@ export default function AdminSettings() {
         qc.invalidateQueries({ queryKey: ["week-plan"] })
         qc.invalidateQueries({ queryKey: ["shopping-list"] })
       }
+      if (variables.achievements_enabled !== undefined) {
+        qc.invalidateQueries({ queryKey: ["achievements"] })
+      }
       if (variables.app_name !== undefined) {
         updateAppName(variables.app_name || "NiniMenu")
       }
@@ -154,6 +157,13 @@ export default function AdminSettings() {
           <Toggle
             value={settings?.blind_box_enabled !== "0"}
             onChange={() => updateMut.mutate({ blind_box_enabled: settings?.blind_box_enabled === "1" ? "0" : "1" })}
+          />
+        </SettingRow>
+
+        <SettingRow label="成就系统">
+          <Toggle
+            value={settings?.achievements_enabled === "1"}
+            onChange={() => updateMut.mutate({ achievements_enabled: settings?.achievements_enabled === "1" ? "0" : "1" })}
           />
         </SettingRow>
       </div>

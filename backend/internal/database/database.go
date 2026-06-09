@@ -137,6 +137,12 @@ func seedData() {
 		DB.Create(&models.Setting{Key: "dinner_dishes_per_day", Value: "1"})
 	}
 
+	var achievementsEnabledCount int64
+	DB.Model(&models.Setting{}).Where("`key` = ?", "achievements_enabled").Count(&achievementsEnabledCount)
+	if achievementsEnabledCount == 0 {
+		DB.Create(&models.Setting{Key: "achievements_enabled", Value: "0"})
+	}
+
 	upsertManagedStringArraySetting("categories", dishes.DefaultCategories())
 
 	upsertStringArraySetting("tastes", dishes.DefaultTastes())

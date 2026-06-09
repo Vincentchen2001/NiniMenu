@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const achievementSyncDelay = 300 * time.Millisecond
+const (
+	achievementSyncDelay  = 300 * time.Millisecond
+	achievementEnabledKey = "achievements_enabled"
+)
 
 var (
 	defaultAchievementsMu      sync.Mutex
@@ -77,6 +80,24 @@ type achievementRecordInfo struct {
 	hasDate bool
 }
 
+func AutoAchievementsEnabled() bool {
+	if database.DB == nil {
+		return false
+	}
+
+	var setting models.Setting
+	if err := database.DB.Where("`key` = ?", achievementEnabledKey).First(&setting).Error; err != nil {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(setting.Value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 func EnsureDefaultAchievements() {
 	defaultAchievementsMu.Lock()
 	defer defaultAchievementsMu.Unlock()
@@ -115,6 +136,10 @@ func EnsureDefaultAchievements() {
 }
 
 func QueueAutoAchievementSync() {
+	if !AutoAchievementsEnabled() {
+		return
+	}
+
 	achievementSyncMu.Lock()
 	defer achievementSyncMu.Unlock()
 
@@ -147,6 +172,9 @@ func RecordAchievementEvent(eventType string, refKey string) {
 	if eventType == "" {
 		return
 	}
+	if !AutoAchievementsEnabled() {
+		return
+	}
 
 	event := models.AchievementEvent{EventType: eventType, RefKey: refKey}
 	database.DB.Create(&event)
@@ -160,6 +188,9 @@ func RecordUniqueAchievementEvent(eventType string, refKey string) {
 	if eventType == "" || refKey == "" {
 		return
 	}
+	if !AutoAchievementsEnabled() {
+		return
+	}
 
 	event := models.AchievementEvent{EventType: eventType, RefKey: refKey}
 	database.DB.Where("event_type = ? AND ref_key = ?", eventType, refKey).
@@ -170,6 +201,9 @@ func RecordUniqueAchievementEvent(eventType string, refKey string) {
 
 func SyncAutoAchievements() {
 	cancelQueuedAutoAchievementSync()
+	if !AutoAchievementsEnabled() {
+		return
+	}
 
 	achievementRunMu.Lock()
 	defer achievementRunMu.Unlock()
