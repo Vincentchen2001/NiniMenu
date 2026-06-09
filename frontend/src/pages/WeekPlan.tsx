@@ -718,8 +718,8 @@ export default function WeekPlan() {
       toast.error("暂无可导出的菜单")
       return
     }
-    exportWeekPlanAsPng(draftPlan, draftPrefs)
-    toast.success("已导出 PNG")
+    const fileName = exportWeekPlanAsPng(draftPlan, draftPrefs)
+    if (fileName) toast.success(`已开始下载：${fileName}`)
   }
 
   if (loading && draftPlan.days.length === 0) return <LoadingState />
