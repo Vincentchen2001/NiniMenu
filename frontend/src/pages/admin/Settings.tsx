@@ -45,6 +45,10 @@ export default function AdminSettings() {
     mutationFn: (s: Record<string, string>) => settingsApi.update(s),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ["settings"] })
+      if (variables.lunch_dishes_per_day !== undefined || variables.dinner_dishes_per_day !== undefined) {
+        qc.invalidateQueries({ queryKey: ["week-plan"] })
+        qc.invalidateQueries({ queryKey: ["shopping-list"] })
+      }
       if (variables.app_name !== undefined) {
         updateAppName(variables.app_name || "NiniMenu")
       }
@@ -172,7 +176,7 @@ export default function AdminSettings() {
             <button
               onClick={() => {
                 const v = lunchPerDay !== null ? lunchPerDay : asString(settings?.lunch_dishes_per_day, "")
-                if (!v || Number(v) < 1) { toast.error("至少需要1道菜"); return }
+                if (v === "" || Number(v) < 0) { toast.error("不能小于0道菜"); return }
                 updateMut.mutate({ lunch_dishes_per_day: v })
               }}
               disabled={updateMut.isPending}
@@ -197,7 +201,7 @@ export default function AdminSettings() {
             <button
               onClick={() => {
                 const v = dinnerPerDay !== null ? dinnerPerDay : asString(settings?.dinner_dishes_per_day, "")
-                if (!v || Number(v) < 1) { toast.error("至少需要1道菜"); return }
+                if (v === "" || Number(v) < 0) { toast.error("不能小于0道菜"); return }
                 updateMut.mutate({ dinner_dishes_per_day: v })
               }}
               disabled={updateMut.isPending}

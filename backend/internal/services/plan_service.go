@@ -44,7 +44,7 @@ func getCurrentWeekKey() string {
 func getSettingInt(key string, defaultVal int) int {
 	var setting models.Setting
 	if err := database.DB.Where("`key` = ?", key).First(&setting).Error; err == nil {
-		if n, err := strconv.Atoi(setting.Value); err == nil && n > 0 {
+		if n, err := strconv.Atoi(setting.Value); err == nil && n >= 0 {
 			return n
 		}
 	}
@@ -96,6 +96,14 @@ func saveWeekPlanCache(plan *WeekPlan) {
 	planMu.Unlock()
 }
 
+func InvalidateWeekPlanCache() {
+	database.DB.Where("`key` = ?", "week_plan_cache").Delete(&models.Setting{})
+	planMu.Lock()
+	cachedPlan = nil
+	cachedWeekKey = ""
+	planMu.Unlock()
+}
+
 func GenerateWeekPlan() (*WeekPlan, error) {
 	var dishes []models.Dish
 	database.DB.Where("enabled = ?", true).Find(&dishes)
@@ -142,6 +150,8 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		dayPlan := WeekDayPlan{
 			Date:    date.Format("2006-01-02"),
 			DayName: dayNames[i],
+			Lunch:   []models.Dish{},
+			Dinner:  []models.Dish{},
 		}
 
 		usedThisDay := make(map[uint]bool)
@@ -156,6 +166,9 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 }
 
 func pickNDishes(pool []models.Dish, count int, globalUsed map[uint]bool, dayUsed map[uint]bool, r *rand.Rand) []models.Dish {
+	if count <= 0 {
+		return []models.Dish{}
+	}
 	available := filterAvailableBoth(pool, globalUsed, dayUsed)
 	var picked []models.Dish
 

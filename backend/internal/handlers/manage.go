@@ -250,9 +250,13 @@ func UpdateSettings(c *gin.Context) {
 		return
 	}
 
+	shouldInvalidateWeekPlan := false
 	for key, value := range req.Settings {
 		if key == "admin_password" || key == "app_password" {
 			continue
+		}
+		if key == "lunch_dishes_per_day" || key == "dinner_dishes_per_day" {
+			shouldInvalidateWeekPlan = true
 		}
 		var existing models.Setting
 		if err := database.DB.Where("`key` = ?", key).First(&existing).Error; err == nil {
@@ -260,6 +264,9 @@ func UpdateSettings(c *gin.Context) {
 		} else {
 			database.DB.Create(&models.Setting{Key: key, Value: value})
 		}
+	}
+	if shouldInvalidateWeekPlan {
+		services.InvalidateWeekPlanCache()
 	}
 
 	utils.SuccessMsg(c, "更新成功")
@@ -305,13 +312,13 @@ func GetDashboard(c *gin.Context) {
 		Find(&topDishes)
 
 	type RecentRecord struct {
-		ID        uint   `json:"id"`
-		DishID    uint   `json:"dish_id"`
-		DishName  string `json:"dish_name"`
-		MealType  string `json:"meal_type"`
-		MealDate  string `json:"meal_date"`
-		Mood      string `json:"mood"`
-		Rating    int    `json:"rating"`
+		ID       uint   `json:"id"`
+		DishID   uint   `json:"dish_id"`
+		DishName string `json:"dish_name"`
+		MealType string `json:"meal_type"`
+		MealDate string `json:"meal_date"`
+		Mood     string `json:"mood"`
+		Rating   int    `json:"rating"`
 	}
 	var recentRecords []RecentRecord
 	database.DB.Model(&models.MealRecord{}).
@@ -340,16 +347,16 @@ func GetDashboard(c *gin.Context) {
 	database.DB.Model(&models.Dish{}).Select("difficulty, count(*) as count").Where("enabled = ?", true).Group("difficulty").Find(&difficultyCounts)
 
 	utils.Success(c, gin.H{
-		"total_dishes":     totalDishes,
-		"enabled_dishes":   enabledDishes,
-		"disabled_dishes":  disabledDishes,
-		"total_records":    totalRecords,
-		"today_records":    todayRecords,
-		"favorite_count":   favoriteCount,
-		"category_counts":  categoryCounts,
-		"top_dishes":       topDishes,
-		"recent_records":   recentRecords,
-		"week_trend":       weekTrend,
+		"total_dishes":      totalDishes,
+		"enabled_dishes":    enabledDishes,
+		"disabled_dishes":   disabledDishes,
+		"total_records":     totalRecords,
+		"today_records":     todayRecords,
+		"favorite_count":    favoriteCount,
+		"category_counts":   categoryCounts,
+		"top_dishes":        topDishes,
+		"recent_records":    recentRecords,
+		"week_trend":        weekTrend,
 		"difficulty_counts": difficultyCounts,
 	})
 }

@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { dishesApi, pickApi, recordsApi } from "@/api"
+import { dishesApi, pickApi, recordsApi, settingsApi } from "@/api"
 import type { Dish, DishIngredient, MealRecord } from "@/types"
-import { asArray } from "@/lib/utils"
+import { asArray, asString } from "@/lib/utils"
 import { launchConfetti } from "@/lib/confetti"
 import DishImage from "@/components/DishImage"
 import PageHeader from "@/components/PageHeader"
@@ -37,7 +37,7 @@ type PlanProfile = "balanced" | "quick" | "light" | "spicy" | "favorite"
 
 const weekdayNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
 const mealOrder: MealType[] = ["lunch", "dinner"]
-const defaultTargets: Record<MealType, number> = { lunch: 2, dinner: 2 }
+const fallbackTargets: Record<MealType, number> = { lunch: 2, dinner: 2 }
 const maxPerMeal = 5
 
 const profileOptions: Array<{
@@ -87,6 +87,14 @@ function getTomorrow() {
   d.setDate(d.getDate() + 1)
   const str = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
   return { str, label: `${str.slice(5)} ${weekdayNames[d.getDay()]}` }
+}
+
+function targetFromSetting(value: unknown, fallback: number) {
+  const raw = asString(value, String(fallback)).trim()
+  if (raw === "") return fallback
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback
+  return Math.min(maxPerMeal, Math.floor(parsed))
 }
 
 function diffLabel(difficulty: string) {
@@ -661,7 +669,7 @@ export default function Tomorrow() {
   const { str: tomorrowStr, label: tomorrowLabel } = getTomorrow()
 
   const [profile, setProfile] = useState<PlanProfile>("balanced")
-  const [targets, setTargets] = useState<Record<MealType, number>>(defaultTargets)
+  const [targets, setTargets] = useState<Record<MealType, number>>(fallbackTargets)
   const [lunch, setLunch] = useState<Dish[]>([])
   const [dinner, setDinner] = useState<Dish[]>([])
   const [originalRecords, setOriginalRecords] = useState<MealRecord[]>([])
@@ -674,9 +682,18 @@ export default function Tomorrow() {
     queryKey: ["records", "tomorrow", tomorrowStr],
     queryFn: () => recordsApi.list({ date_from: tomorrowStr, date_to: tomorrowStr, pageSize: "100" }),
   })
+  const { data: settings, isLoading: settingsLoading } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => settingsApi.get(),
+  })
+
+  const defaultTargets = useMemo<Record<MealType, number>>(() => ({
+    lunch: targetFromSetting(settings?.lunch_dishes_per_day, fallbackTargets.lunch),
+    dinner: targetFromSetting(settings?.dinner_dishes_per_day, fallbackTargets.dinner),
+  }), [settings])
 
   useEffect(() => {
-    if (recordsLoading || initializedFor === tomorrowStr) return
+    if (recordsLoading || settingsLoading || initializedFor === tomorrowStr) return
     if (initStartedForRef.current === tomorrowStr) return
     initStartedForRef.current = tomorrowStr
 
@@ -699,7 +716,7 @@ export default function Tomorrow() {
     setTargets(defaultTargets)
     void generateAll(profile, defaultTargets).finally(() => setInitializedFor(tomorrowStr))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initializedFor, recordsLoading, tomorrowRecords, tomorrowStr])
+  }, [defaultTargets, initializedFor, recordsLoading, settingsLoading, tomorrowRecords, tomorrowStr])
 
   const selectedMealById = useMemo(() => {
     const map = new Map<number, MealType>()
@@ -720,7 +737,7 @@ export default function Tomorrow() {
   const currentKey = keyFromDishes(lunch, dinner)
   const originalKey = keyFromRecords(originalRecords)
   const hasChanges = initializedFor === tomorrowStr && currentKey !== originalKey
-  const loading = recordsLoading || initializedFor !== tomorrowStr
+  const loading = recordsLoading || settingsLoading || initializedFor !== tomorrowStr
   const disabled = loading || picking
 
   const savePlanMut = useMutation({

@@ -1,6 +1,96 @@
 package services
 
-import "testing"
+import (
+	"fmt"
+	"ninimenu/internal/database"
+	"ninimenu/internal/models"
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+)
+
+func setupPlanServiceTestDB(t *testing.T) {
+	t.Helper()
+
+	originalDB := database.DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	if err := db.AutoMigrate(&models.Dish{}, &models.Setting{}); err != nil {
+		t.Fatalf("migrate test db: %v", err)
+	}
+
+	database.DB = db
+	t.Cleanup(func() {
+		database.DB = originalDB
+	})
+}
+
+func TestGenerateWeekPlanAllowsSkippingLunch(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	if err := database.DB.Create(&models.Setting{Key: "lunch_dishes_per_day", Value: "0"}).Error; err != nil {
+		t.Fatalf("create lunch setting: %v", err)
+	}
+	if err := database.DB.Create(&models.Setting{Key: "dinner_dishes_per_day", Value: "1"}).Error; err != nil {
+		t.Fatalf("create dinner setting: %v", err)
+	}
+	for i := 1; i <= 3; i++ {
+		dish := models.Dish{
+			Name:     fmt.Sprintf("测试菜%d", i),
+			MealType: "all",
+			Enabled:  true,
+		}
+		if err := database.DB.Create(&dish).Error; err != nil {
+			t.Fatalf("create dish %d: %v", i, err)
+		}
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if len(plan.Days) != 7 {
+		t.Fatalf("plan day count = %d, want 7", len(plan.Days))
+	}
+	for _, day := range plan.Days {
+		if day.Lunch == nil {
+			t.Fatalf("%s lunch should be an empty slice, not nil", day.DayName)
+		}
+		if len(day.Lunch) != 0 {
+			t.Fatalf("%s lunch count = %d, want 0", day.DayName, len(day.Lunch))
+		}
+		if len(day.Dinner) != 1 {
+			t.Fatalf("%s dinner count = %d, want 1", day.DayName, len(day.Dinner))
+		}
+	}
+}
+
+func TestInvalidateWeekPlanCacheClearsStoredAndInMemoryCache(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	cachedPlan = &WeekPlan{Days: []WeekDayPlan{{Date: "2099-01-01", DayName: "周四"}}}
+	cachedWeekKey = "2099-01-01"
+	if err := database.DB.Create(&models.Setting{Key: "week_plan_cache", Value: `{"days":[]}`}).Error; err != nil {
+		t.Fatalf("create cache setting: %v", err)
+	}
+
+	InvalidateWeekPlanCache()
+
+	if cachedPlan != nil {
+		t.Fatalf("cachedPlan should be nil after invalidation")
+	}
+	if cachedWeekKey != "" {
+		t.Fatalf("cachedWeekKey = %q, want empty", cachedWeekKey)
+	}
+	var count int64
+	database.DB.Model(&models.Setting{}).Where("`key` = ?", "week_plan_cache").Count(&count)
+	if count != 0 {
+		t.Fatalf("stored week_plan_cache count = %d, want 0", count)
+	}
+}
 
 func TestCompactShoppingAmounts(t *testing.T) {
 	tests := []struct {
