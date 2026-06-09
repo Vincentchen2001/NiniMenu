@@ -132,14 +132,14 @@ export default function DishDetail() {
     enabled: !!dishId,
     staleTime: 0,
   })
-  const dishRecords = dishRecordsData?.records || []
+  const dishRecords = useMemo(() => dishRecordsData?.records ?? [], [dishRecordsData?.records])
   const dishStats: DishRecordsStats = dishRecordsData?.stats || { total_count: 0, lunch_count: 0, dinner_count: 0, yum_percent: 0, ok_percent: 0, no_percent: 0, avg_rating: 0, last_date: "", avg_interval: 0 }
 
   const { data: dishesData } = useQuery({
     queryKey: ["dishes", "all"],
     queryFn: () => dishesApi.list({ pageSize: "100" }),
   })
-  const allDishes = dishesData?.items || []
+  const allDishes = useMemo(() => dishesData?.items ?? [], [dishesData?.items])
   const sameCategoryDishes = useMemo(() => allDishes.filter((d: Dish) => d.category === dish?.category && d.id !== dishId).slice(0, 6), [allDishes, dish?.category, dishId])
 
   const favMut = useMutation({

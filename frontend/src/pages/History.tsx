@@ -173,7 +173,7 @@ export default function History() {
     queryFn: () => dayRatingApi.list({ date_from: monthStartKey, date_to: monthEndKey }),
   })
 
-  const records = recordsData?.items || []
+  const records = useMemo(() => recordsData?.items ?? [], [recordsData?.items])
 
   const recordByDate = useMemo(() => {
     const m = new Map<string, MealRecord[]>()
@@ -279,7 +279,6 @@ export default function History() {
       if (files.length > remaining) {
         toast.error(`已选${files.length}张，仅上传前${remaining}张`)
       }
-      let uploaded = 0
       let failed = 0
       let lastErrMsg = ""
       for (const file of toUpload) {
@@ -288,7 +287,6 @@ export default function History() {
           const url = res.data.data.url
           if (url) {
             setMealPhotos((prev) => [...prev, url])
-            uploaded++
           } else {
             failed++
           }

@@ -513,7 +513,7 @@ function DishPickerModal({
     queryKey: ["dishes", "tomorrow-picker", meal],
     queryFn: () => dishesApi.list({ enabled: "true", meal_type: meal, pageSize: "100", sort: "sort_order", order: "asc" }),
   })
-  const dishes = data?.items || []
+  const dishes = useMemo(() => data?.items ?? [], [data?.items])
   const candidates = useMemo(() => dishes.filter((d) => matchesMeal(d, meal)), [dishes, meal])
 
   const categories = useMemo(() => {
@@ -706,24 +706,35 @@ export default function Tomorrow() {
     if (initStartedForRef.current === tomorrowStr) return
     initStartedForRef.current = tomorrowStr
 
-    const records = tomorrowRecords?.items || []
-    setOriginalRecords(records)
+    const records = tomorrowRecords?.items ?? []
+    let cancelled = false
 
-    if (records.length > 0) {
-      const nextLunch = mealRecords(records, "lunch").map(recordToDish)
-      const nextDinner = mealRecords(records, "dinner").map(recordToDish)
-      setLunch(nextLunch)
-      setDinner(nextDinner)
-      setTargets({
-        lunch: Math.min(maxPerMeal, Math.max(nextLunch.length, defaultTargets.lunch)),
-        dinner: Math.min(maxPerMeal, Math.max(nextDinner.length, defaultTargets.dinner)),
+    queueMicrotask(() => {
+      if (cancelled) return
+      setOriginalRecords(records)
+
+      if (records.length > 0) {
+        const nextLunch = mealRecords(records, "lunch").map(recordToDish)
+        const nextDinner = mealRecords(records, "dinner").map(recordToDish)
+        setLunch(nextLunch)
+        setDinner(nextDinner)
+        setTargets({
+          lunch: Math.min(maxPerMeal, Math.max(nextLunch.length, defaultTargets.lunch)),
+          dinner: Math.min(maxPerMeal, Math.max(nextDinner.length, defaultTargets.dinner)),
+        })
+        setInitializedFor(tomorrowStr)
+        return
+      }
+
+      setTargets(defaultTargets)
+      void generateAll(profile, defaultTargets).finally(() => {
+        if (!cancelled) setInitializedFor(tomorrowStr)
       })
-      setInitializedFor(tomorrowStr)
-      return
-    }
+    })
 
-    setTargets(defaultTargets)
-    void generateAll(profile, defaultTargets).finally(() => setInitializedFor(tomorrowStr))
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultTargets, initializedFor, recordsLoading, settingsLoading, tomorrowRecords, tomorrowStr])
 

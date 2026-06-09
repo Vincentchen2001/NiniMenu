@@ -56,7 +56,7 @@ export default function Favorites() {
     queryFn: () => favoritesApi.overview(),
   })
 
-  const items = overview?.items ?? []
+  const items = useMemo(() => overview?.items ?? [], [overview?.items])
   const stats = overview?.stats
   const categories = overview?.categories ?? []
 

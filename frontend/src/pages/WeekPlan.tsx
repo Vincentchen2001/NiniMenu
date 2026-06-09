@@ -612,11 +612,25 @@ export default function WeekPlan() {
   })
 
   useEffect(() => {
-    if (serverPlan && !dirtyPlan) setDraftPlan(normalizePlan(serverPlan))
+    if (!serverPlan || dirtyPlan) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) setDraftPlan(normalizePlan(serverPlan))
+    })
+    return () => {
+      cancelled = true
+    }
   }, [dirtyPlan, serverPlan])
 
   useEffect(() => {
-    if (serverPrefs && !dirtyPrefs) setDraftPrefs(normalizePrefs(serverPrefs))
+    if (!serverPrefs || dirtyPrefs) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) setDraftPrefs(normalizePrefs(serverPrefs))
+    })
+    return () => {
+      cancelled = true
+    }
   }, [dirtyPrefs, serverPrefs])
 
   const activePickerDay = picker ? draftPlan.days.find((day) => day.date === picker.date) : null
