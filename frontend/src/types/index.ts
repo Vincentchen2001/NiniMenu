@@ -70,6 +70,41 @@ export interface DishInput {
   sort_order?: number
 }
 
+export interface DishTraitAuditIssue {
+  field: string
+  label: string
+  severity: string
+  current: string
+  expected: string
+  message: string
+}
+
+export interface DishTraitAuditItem {
+  dish_id: number
+  dish_name: string
+  category: string
+  trait_source: string
+  trait_version: number
+  issues: DishTraitAuditIssue[]
+}
+
+export interface DishTraitAuditFieldCount {
+  field: string
+  label: string
+  count: number
+}
+
+export interface DishTraitAuditReport {
+  total: number
+  passed: number
+  issue_dishes: number
+  issue_count: number
+  auto_traits: number
+  manual_traits: number
+  field_counts: DishTraitAuditFieldCount[]
+  items: DishTraitAuditItem[]
+}
+
 export interface MealRecord {
   id: number
   dish_id: number

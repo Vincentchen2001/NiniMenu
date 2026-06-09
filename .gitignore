@@ -1,1 +1,15 @@
+# Local runtime data
 /backend/data/
+
+# Build and dependency output
+/frontend/dist/
+/frontend/node_modules/
+
+# Local verification and preview artifacts
+/.playwright-mcp/
+/design-preview/
+/.claude/
+
+# Logs and OS metadata
+*.log
+.DS_Store

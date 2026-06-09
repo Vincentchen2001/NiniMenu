@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useMutation } from "@tanstack/react-query"
 import { authApi } from "@/api"
 import { useAuthStore } from "@/store/useAuthStore"
@@ -8,20 +8,26 @@ import toast from "react-hot-toast"
 
 export default function AdminLogin() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { isLoggedIn, login } = useAuthStore()
   const appName = useAppInfoStore((s) => s.appName)
   const [password, setPassword] = useState("")
+  const searchParams = new URLSearchParams(location.search)
+  const redirectParam = searchParams.get("redirect") || ""
+  const redirectTo = redirectParam.startsWith("/admin/") && !redirectParam.startsWith("/admin/login")
+    ? redirectParam
+    : "/admin/dashboard"
 
   useEffect(() => {
-    if (isLoggedIn) navigate("/admin/dashboard", { replace: true })
-  }, [isLoggedIn, navigate])
+    if (isLoggedIn) navigate(redirectTo, { replace: true })
+  }, [isLoggedIn, navigate, redirectTo])
 
   const loginMut = useMutation({
     mutationFn: () => authApi.login(password),
     onSuccess: (data) => {
       login(data.token)
       toast.success("✅ 登录成功")
-      navigate("/admin/dashboard")
+      navigate(redirectTo, { replace: true })
     },
     onError: () => toast.error("密码错误"),
   })

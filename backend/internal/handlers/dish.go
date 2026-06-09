@@ -86,6 +86,15 @@ func GetDish(c *gin.Context) {
 	utils.Success(c, dish)
 }
 
+func GetDishTraitAudit(c *gin.Context) {
+	report, err := services.BuildDishTraitAudit()
+	if err != nil {
+		utils.InternalError(c, "菜品画像体检失败")
+		return
+	}
+	utils.Success(c, report)
+}
+
 type CreateDishRequest struct {
 	Name               string `json:"name" binding:"required"`
 	ImageURL           string `json:"image_url"`

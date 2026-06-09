@@ -3,9 +3,9 @@ import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { dishesApi, settingsApi } from "@/api"
 import { asArray } from "@/lib/utils"
-import type { Dish } from "@/types"
+import type { Dish, DishTraitAuditItem, DishTraitAuditReport } from "@/types"
 import toast from "react-hot-toast"
-import { Search } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Search, Stethoscope } from "lucide-react"
 
 const categoryEmojis: Record<string, string> = {
   川菜: "🌶", 粤菜: "🐟", 家常菜: "🍳", 快手菜: "⚡",
@@ -14,6 +14,132 @@ const categoryEmojis: Record<string, string> = {
 }
 function getEmoji(d: Dish) { return categoryEmojis[d.category] || "🍽" }
 function diffLabel(d: string) { return d === "easy" ? "简单" : d === "medium" ? "中等" : "困难" }
+
+function TraitAuditPanel({
+  report,
+  loading,
+  refreshing,
+  onRefresh,
+  onOpenDish,
+}: {
+  report?: DishTraitAuditReport
+  loading: boolean
+  refreshing: boolean
+  onRefresh: () => void
+  onOpenDish: (dishId: number) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const issueItems = report?.items || []
+  const fieldCounts = report?.field_counts || []
+  const clean = !!report && report.issue_count === 0
+  const visibleItems = open ? issueItems : issueItems.slice(0, 4)
+
+  return (
+    <section className="mx-5 mt-3 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${clean ? "bg-mint-light text-mint" : "bg-primary-light text-primary"}`}>
+            {clean ? <CheckCircle2 size={18} strokeWidth={2.45} /> : <Stethoscope size={18} strokeWidth={2.45} />}
+          </span>
+          <div className="min-w-0">
+            <div className="text-sm font-extrabold text-text">画像体检</div>
+            <div className="truncate text-[11px] font-semibold text-text3">
+              {loading ? "检查中" : clean ? `${report?.total || 0} 道菜已通过` : `${report?.issue_dishes || 0} 道菜需复核 · ${report?.issue_count || 0} 项`}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={onRefresh}
+          disabled={refreshing}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-bg text-text3 transition-all hover:text-primary disabled:opacity-50"
+          aria-label="重新体检"
+          title="重新体检"
+        >
+          <RefreshCw size={15} strokeWidth={2.45} className={refreshing ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="grid grid-cols-3 gap-2 px-4 pb-4">
+          <div className="h-14 rounded-xl skeleton" />
+          <div className="h-14 rounded-xl skeleton" />
+          <div className="h-14 rounded-xl skeleton" />
+        </div>
+      ) : report && (
+        <>
+          <div className="grid grid-cols-3 gap-2 px-4 pb-3">
+            <AuditStat label="总菜数" value={report.total} tone="bg-bg text-text2" />
+            <AuditStat label="已通过" value={report.passed} tone="bg-mint-light text-mint" />
+            <AuditStat label="可疑项" value={report.issue_count} tone={clean ? "bg-bg text-text3" : "bg-primary-light text-primary"} />
+          </div>
+
+          {fieldCounts.length > 0 && (
+            <div className="flex gap-1.5 overflow-x-auto px-4 pb-3 scrollbar-none">
+              {fieldCounts.map((field) => (
+                <span key={field.field} className="shrink-0 rounded-full bg-bg px-2.5 py-1 text-[11px] font-bold text-text2">
+                  {field.label} {field.count}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {issueItems.length > 0 && (
+            <div className="border-t border-border bg-bg/45">
+              {visibleItems.map((item) => (
+                <TraitAuditRow key={item.dish_id} item={item} onOpenDish={onOpenDish} />
+              ))}
+              {issueItems.length > 4 && (
+                <button
+                  onClick={() => setOpen((value) => !value)}
+                  className="flex w-full items-center justify-center gap-1.5 px-4 py-2.5 text-[12px] font-extrabold text-primary"
+                >
+                  {open ? "收起" : `查看全部 ${issueItems.length} 道`}
+                  <ChevronDown size={14} strokeWidth={2.4} className={open ? "rotate-180 transition-transform" : "transition-transform"} />
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function AuditStat({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div className={`rounded-xl px-3 py-2 ${tone}`}>
+      <div className="text-[10px] font-bold opacity-75">{label}</div>
+      <div className="mt-0.5 text-lg font-extrabold leading-tight">{value}</div>
+    </div>
+  )
+}
+
+function TraitAuditRow({ item, onOpenDish }: { item: DishTraitAuditItem; onOpenDish: (dishId: number) => void }) {
+  const topIssues = item.issues.slice(0, 2)
+  return (
+    <button
+      onClick={() => onOpenDish(item.dish_id)}
+      className="flex w-full items-start gap-2.5 border-b border-border/70 px-4 py-3 text-left last:border-0 transition-all active:bg-primary-light/50"
+    >
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
+        <AlertTriangle size={15} strokeWidth={2.45} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-extrabold text-text">{item.dish_name}</span>
+          <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-[10px] font-bold text-text3">{item.issues.length} 项</span>
+        </span>
+        <span className="mt-1 block space-y-0.5">
+          {topIssues.map((issue) => (
+            <span key={`${issue.field}-${issue.message}`} className="block truncate text-[11px] font-semibold text-text2">
+              {issue.label}: {issue.current} → {issue.expected}
+            </span>
+          ))}
+        </span>
+      </span>
+    </button>
+  )
+}
 
 export default function AdminDishes() {
   const navigate = useNavigate()
@@ -52,6 +178,10 @@ export default function AdminDishes() {
   const { data: dishesData, isLoading } = useQuery({
     queryKey: ["admin", "dishes", params],
     queryFn: () => dishesApi.list(params),
+  })
+  const { data: traitAudit, isLoading: auditLoading, isFetching: auditFetching, refetch: refetchAudit } = useQuery({
+    queryKey: ["admin", "dishes", "trait-audit"],
+    queryFn: () => dishesApi.traitAudit(),
   })
   const dishes = dishesData?.items || []
   const total = dishesData?.total || 0
@@ -216,6 +346,14 @@ export default function AdminDishes() {
           <button onClick={clearFilters} className="text-[11px] text-primary">清除筛选</button>
         </div>
       )}
+
+      <TraitAuditPanel
+        report={traitAudit}
+        loading={auditLoading}
+        refreshing={auditFetching}
+        onRefresh={() => refetchAudit()}
+        onOpenDish={(dishId) => navigate(`/admin/dishes/${dishId}`)}
+      />
 
       <div className="px-5 mt-3">
         {batchMode && selected.size > 0 && (

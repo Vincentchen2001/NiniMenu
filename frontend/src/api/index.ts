@@ -1,10 +1,11 @@
 import { api, getUploadErrorMessage } from "./client"
 import defaultClient from "./client"
-import type { Dish, DishInput, PaginatedData, PickResult, BlindBoxResult, MealRecord, StatsData, DashboardData, Achievement, WeekPlan, WeekPlanPreferences, MenuRule, ShoppingCategory, ShoppingCategoryOverride, Holiday, Quote, DayRating, PhotoWall, DishRecordsResponse, DishCategoryCounts, FavoriteOverview } from "@/types"
+import type { Dish, DishInput, DishTraitAuditReport, PaginatedData, PickResult, BlindBoxResult, MealRecord, StatsData, DashboardData, Achievement, WeekPlan, WeekPlanPreferences, MenuRule, ShoppingCategory, ShoppingCategoryOverride, Holiday, Quote, DayRating, PhotoWall, DishRecordsResponse, DishCategoryCounts, FavoriteOverview } from "@/types"
 
 export const dishesApi = {
   list: (params?: Record<string, string>) =>
     api<PaginatedData<Dish>>("GET", "/dishes", params),
+  traitAudit: () => api<DishTraitAuditReport>("GET", "/dishes/trait-audit"),
   categoryCounts: () => api<DishCategoryCounts>("GET", "/dishes/category-counts"),
   get: (id: number) => api<Dish>("GET", `/dishes/${id}`),
   records: (id: number) => api<DishRecordsResponse>("GET", `/dishes/${id}/records`),

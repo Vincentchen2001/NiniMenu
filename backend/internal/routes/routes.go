@@ -36,6 +36,7 @@ func Setup(r *gin.Engine) {
 		{
 			app.GET("/dishes", handlers.GetDishes)
 			app.GET("/dishes/category-counts", handlers.GetDishCategoryCounts)
+			app.GET("/dishes/trait-audit", handlers.GetDishTraitAudit)
 			app.GET("/dishes/:id", handlers.GetDish)
 			app.GET("/dishes/:id/records", handlers.GetDishRecords)
 			app.GET("/records", handlers.GetRecords)

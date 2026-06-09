@@ -67,21 +67,46 @@ func EnsureDefaultMenuRules() error {
 	if database.DB == nil {
 		return nil
 	}
+	var count int64
+	if err := database.DB.Model(&models.MenuRule{}).Count(&count).Error; err != nil {
+		return err
+	}
 	for _, rule := range models.DefaultMenuRules() {
 		if err := normalizeAndValidateMenuRule(&rule); err != nil {
 			return err
 		}
 		var existing models.MenuRule
 		if err := database.DB.Where("code = ?", rule.Code).First(&existing).Error; err == nil {
+			if shouldRefreshDefaultMenuRule(existing, rule) {
+				rule.ID = existing.ID
+				rule.CreatedAt = existing.CreatedAt
+				if err := database.DB.Save(&rule).Error; err != nil {
+					return err
+				}
+			}
 			continue
 		} else if err != nil && err != gorm.ErrRecordNotFound {
 			return err
+		}
+		if count > 0 {
+			continue
 		}
 		if err := database.DB.Create(&rule).Error; err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func shouldRefreshDefaultMenuRule(existing models.MenuRule, current models.MenuRule) bool {
+	if existing.Code != "avoid_same_primary_protein" {
+		return false
+	}
+	return existing.RuleKind == menuRuleKindConstraint &&
+		existing.Severity == "hard" &&
+		!existing.Relaxable &&
+		strings.TrimSpace(existing.Expression) == `countOverlapMeal("protein_sources", candidate.protein_sources) == 0 || hasOnly(candidate.protein_sources, "soy")` &&
+		current.RuleKind == menuRuleKindScore
 }
 
 func SaveMenuRules(rules []models.MenuRule) ([]models.MenuRule, error) {
@@ -97,7 +122,9 @@ func SaveMenuRules(rules []models.MenuRule) ([]models.MenuRule, error) {
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		codes := make([]string, 0, len(rules))
 		for _, rule := range rules {
+			codes = append(codes, rule.Code)
 			var existing models.MenuRule
 			err := tx.Where("code = ?", rule.Code).First(&existing).Error
 			if err == nil {
@@ -114,6 +141,13 @@ func SaveMenuRules(rules []models.MenuRule) ([]models.MenuRule, error) {
 			if err := tx.Create(&rule).Error; err != nil {
 				return err
 			}
+		}
+		query := tx
+		if len(codes) > 0 {
+			query = query.Where("code NOT IN ?", codes)
+		}
+		if err := query.Delete(&models.MenuRule{}).Error; err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {

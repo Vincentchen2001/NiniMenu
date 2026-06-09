@@ -1,9 +1,11 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useLocation } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { settingsApi, shoppingCategoriesApi } from "@/api"
+import MenuRuleEditor, { menuRulesEqual } from "@/components/MenuRuleEditor"
+import { settingsApi, shoppingCategoriesApi, weekPlanApi } from "@/api"
 import { asString } from "@/lib/utils"
 import { useAppInfoStore } from "@/store/useAppInfoStore"
-import type { ShoppingCategoryOverride } from "@/types"
+import type { MenuRule, ShoppingCategoryOverride } from "@/types"
 import toast from "react-hot-toast"
 
 const shoppingCategories = ["蔬菜", "肉类", "配料", "其他"]
@@ -30,6 +32,7 @@ function SettingRow({ label, children }: { label: string; children: React.ReactN
 
 export default function AdminSettings() {
   const qc = useQueryClient()
+  const location = useLocation()
   const { data: settings, isLoading } = useQuery({ queryKey: ["settings"], queryFn: () => settingsApi.get() })
 
   const [repeatDays, setRepeatDays] = useState<string | null>(null)
@@ -38,6 +41,9 @@ export default function AdminSettings() {
   const [appName, setAppName] = useState<string | null>(null)
   const [shoppingItemName, setShoppingItemName] = useState("")
   const [shoppingCategory, setShoppingCategory] = useState("蔬菜")
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const [draftRules, setDraftRules] = useState<MenuRule[]>([])
+  const [dirtyRules, setDirtyRules] = useState(false)
   const storedAppName = useAppInfoStore((s) => s.appName)
   const updateAppName = useAppInfoStore((s) => s.setAppName)
 
@@ -63,6 +69,22 @@ export default function AdminSettings() {
     queryKey: ["shopping-categories"],
     queryFn: () => shoppingCategoriesApi.list(),
   })
+  const { data: serverRules = [], isLoading: rulesLoading } = useQuery({
+    queryKey: ["week-plan", "rules"],
+    queryFn: () => weekPlanApi.rules(),
+  })
+
+  useEffect(() => {
+    if (!dirtyRules) setDraftRules(serverRules)
+  }, [dirtyRules, serverRules])
+
+  useEffect(() => {
+    if (location.hash !== "#advanced-rules") return
+    setRulesOpen(true)
+    window.setTimeout(() => {
+      document.getElementById("advanced-rules")?.scrollIntoView({ behavior: "smooth", block: "start" })
+    }, 80)
+  }, [location.hash])
 
   const saveCategoryMut = useMutation({
     mutationFn: (data: { item_name: string; category: string }) => shoppingCategoriesApi.save(data),
@@ -85,6 +107,26 @@ export default function AdminSettings() {
     onError: () => toast.error("删除失败"),
   })
 
+  const saveRulesMut = useMutation({
+    mutationFn: () => weekPlanApi.updateRules(draftRules),
+    onSuccess: (rules) => {
+      setDraftRules(rules)
+      setDirtyRules(false)
+      qc.setQueryData(["week-plan", "rules"], rules)
+      qc.invalidateQueries({ queryKey: ["week-plan"] })
+      toast.success("规则已保存")
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "保存规则失败"),
+  })
+
+  const validateRuleMut = useMutation({
+    mutationFn: (rule: MenuRule) => weekPlanApi.validateRule(rule),
+    onSuccess: () => toast.success("表达式有效"),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "表达式无效"),
+  })
+
+  const rulesBusy = rulesLoading || saveRulesMut.isPending || validateRuleMut.isPending
+
   function saveShoppingCategory() {
     const itemName = shoppingItemName.trim()
     if (!itemName) {
@@ -94,11 +136,47 @@ export default function AdminSettings() {
     saveCategoryMut.mutate({ item_name: itemName, category: shoppingCategory })
   }
 
+  function updateRule(index: number, patch: Partial<MenuRule>) {
+    const next = draftRules.map((rule, i) => i === index ? { ...rule, ...patch } : rule)
+    setDraftRules(next)
+    setDirtyRules(!menuRulesEqual(next, serverRules))
+  }
+
+  function addRule() {
+    const next = [
+      ...draftRules,
+      {
+        code: `custom_rule_${Date.now()}`,
+        name: "自定义规则",
+        description: "",
+        enabled: true,
+        scope: "meal",
+        rule_kind: "score",
+        severity: "soft",
+        relaxable: true,
+        expression: "0",
+        priority: 500,
+        message: "",
+      },
+    ]
+    setDraftRules(next)
+    setDirtyRules(true)
+  }
+
+  function removeRule(index: number) {
+    const target = draftRules[index]
+    const next = draftRules.filter((_, i) => i !== index)
+    setDraftRules(next)
+    setDirtyRules(!menuRulesEqual(next, serverRules))
+    if (target && !target.id && target.code.startsWith("custom_rule_")) toast.success("已取消创建")
+    else toast.success("已从草稿移除，保存后生效")
+  }
+
   if (isLoading) return <div className="p-8 text-center text-text2">加载中...</div>
 
   return (
     <div className="px-5 py-4 max-w-[640px] mx-auto pb-20 space-y-4">
-      <div className="rounded-2xl border border-border bg-card p-4">
+      <div id="advanced-rules" className="scroll-mt-4 rounded-2xl border border-border bg-card p-4">
         <div className="text-[13px] font-semibold text-text2 mb-1">基本设置</div>
         <div className="text-[11px] text-text3 mb-2">应用名称与显示偏好</div>
 
@@ -221,6 +299,42 @@ export default function AdminSettings() {
             </button>
           </div>
         </SettingRow>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card p-4">
+        <button
+          onClick={() => setRulesOpen((value) => !value)}
+          className="flex w-full items-center justify-between gap-3 text-left"
+        >
+          <span className="min-w-0">
+            <span className="flex items-center gap-2 text-[13px] font-semibold text-text2">
+              高级推荐规则
+              {dirtyRules && <span className="rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-extrabold text-primary">待保存</span>}
+            </span>
+            <span className="mt-1 block text-[11px] text-text3">
+              默认不用调整；用于调试算法常识和自定义表达式。
+            </span>
+          </span>
+          <span className="shrink-0 rounded-full bg-bg px-3 py-1 text-[11px] font-bold text-text3">
+            {rulesOpen ? "收起" : "展开"}
+          </span>
+        </button>
+
+        {rulesOpen && (
+          <div className="mt-3">
+            <MenuRuleEditor
+              rules={draftRules}
+              canEdit
+              dirty={dirtyRules}
+              busy={rulesBusy}
+              onChange={updateRule}
+              onAdd={addRule}
+              onRemove={removeRule}
+              onValidate={(rule) => validateRuleMut.mutate(rule)}
+              onSave={() => saveRulesMut.mutate()}
+            />
+          </div>
+        )}
       </div>
 
       <div className="rounded-2xl border border-border bg-card p-4">

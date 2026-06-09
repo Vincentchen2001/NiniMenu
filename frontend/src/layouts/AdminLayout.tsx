@@ -17,21 +17,22 @@ export default function AdminLayout() {
   const location = useLocation()
   const { isLoggedIn, logout } = useAuthStore()
   const appName = useAppInfoStore((s) => s.appName)
+  const currentAdminTarget = `${location.pathname}${location.search}${location.hash}`
 
   useEffect(() => {
     if (location.pathname !== "/admin/login" && !isLoggedIn) {
-      navigate("/admin/login", { replace: true })
+      navigate(`/admin/login?redirect=${encodeURIComponent(currentAdminTarget)}`, { replace: true })
     }
-  }, [isLoggedIn, location.pathname, navigate])
+  }, [currentAdminTarget, isLoggedIn, location.pathname, navigate])
 
   useEffect(() => {
     const onExpired = () => {
       logout()
-      navigate("/admin/login", { replace: true })
+      navigate(`/admin/login?redirect=${encodeURIComponent(currentAdminTarget)}`, { replace: true })
     }
     window.addEventListener("admin-auth-expired", onExpired)
     return () => window.removeEventListener("admin-auth-expired", onExpired)
-  }, [logout, navigate])
+  }, [currentAdminTarget, logout, navigate])
 
   const handleLogout = () => {
     logout()
@@ -39,6 +40,14 @@ export default function AdminLayout() {
   }
 
   const isActive = (path: string) => location.pathname === path || (path !== "/admin/dashboard" && location.pathname.startsWith(path))
+
+  if (!isLoggedIn && location.pathname !== "/admin/login") {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-bg px-5 text-sm font-semibold text-text3">
+        正在进入管理登录...
+      </div>
+    )
+  }
 
   return (
     <div className="h-dvh bg-bg flex flex-col overflow-hidden">

@@ -384,6 +384,106 @@ func TestValidateMenuRuleExpression(t *testing.T) {
 	}
 }
 
+func TestDefaultSameProteinRuleIsSoftScore(t *testing.T) {
+	var sameProtein models.MenuRule
+	for _, rule := range models.DefaultMenuRules() {
+		if rule.Code == "avoid_same_primary_protein" {
+			sameProtein = rule
+			break
+		}
+	}
+	if sameProtein.Code == "" {
+		t.Fatalf("DefaultMenuRules() missing avoid_same_primary_protein")
+	}
+	if sameProtein.RuleKind != "score" || sameProtein.Severity != "soft" || !sameProtein.Relaxable {
+		t.Fatalf("avoid_same_primary_protein = kind %q severity %q relaxable %v, want soft score relaxable", sameProtein.RuleKind, sameProtein.Severity, sameProtein.Relaxable)
+	}
+	if err := ValidateMenuRuleExpression(sameProtein); err != nil {
+		t.Fatalf("ValidateMenuRuleExpression(avoid_same_primary_protein) error = %v", err)
+	}
+}
+
+func TestEnsureDefaultMenuRulesUpgradesLegacySameProteinRule(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	legacy := models.MenuRule{
+		Code:        "avoid_same_primary_protein",
+		Name:        "同餐主蛋白不重复",
+		Enabled:     true,
+		Scope:       "meal",
+		RuleKind:    "constraint",
+		Severity:    "hard",
+		Relaxable:   false,
+		Expression:  `countOverlapMeal("protein_sources", candidate.protein_sources) == 0 || hasOnly(candidate.protein_sources, "soy")`,
+		Priority:    40,
+		Message:     "同餐主蛋白来源重复",
+	}
+	if err := database.DB.Create(&legacy).Error; err != nil {
+		t.Fatalf("create legacy rule: %v", err)
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("EnsureDefaultMenuRules() error = %v", err)
+	}
+
+	var got models.MenuRule
+	if err := database.DB.Where("code = ?", "avoid_same_primary_protein").First(&got).Error; err != nil {
+		t.Fatalf("load upgraded rule: %v", err)
+	}
+	if got.RuleKind != "score" || got.Severity != "soft" || !got.Relaxable {
+		t.Fatalf("upgraded rule = kind %q severity %q relaxable %v, want soft score relaxable", got.RuleKind, got.Severity, got.Relaxable)
+	}
+}
+
+func TestSaveMenuRulesDeletesRemovedRules(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	kept := models.MenuRule{
+		Code:       "kept_rule",
+		Name:       "保留规则",
+		Enabled:    true,
+		Scope:      "meal",
+		RuleKind:   "score",
+		Severity:   "soft",
+		Relaxable:  true,
+		Expression: `0`,
+		Priority:   1,
+	}
+	removed := models.MenuRule{
+		Code:       "removed_rule",
+		Name:       "移除规则",
+		Enabled:    true,
+		Scope:      "meal",
+		RuleKind:   "score",
+		Severity:   "soft",
+		Relaxable:  true,
+		Expression: `0`,
+		Priority:   2,
+	}
+	if err := database.DB.Create(&kept).Error; err != nil {
+		t.Fatalf("create kept rule: %v", err)
+	}
+	if err := database.DB.Create(&removed).Error; err != nil {
+		t.Fatalf("create removed rule: %v", err)
+	}
+
+	rules, err := SaveMenuRules([]models.MenuRule{kept})
+	if err != nil {
+		t.Fatalf("SaveMenuRules() error = %v", err)
+	}
+	if len(rules) != 1 || rules[0].Code != "kept_rule" {
+		t.Fatalf("rules after save = %+v, want only kept_rule", rules)
+	}
+
+	var count int64
+	if err := database.DB.Model(&models.MenuRule{}).Where("code = ?", "removed_rule").Count(&count).Error; err != nil {
+		t.Fatalf("count removed rule: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("removed_rule count = %d, want 0", count)
+	}
+}
+
 func TestGenerateWeekPlanHonorsHardMenuRules(t *testing.T) {
 	setupPlanServiceTestDB(t)
 
