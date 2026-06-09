@@ -22,6 +22,15 @@ export interface Dish {
   ingredients: Array<string | DishIngredient>
   seasonings: Array<string | DishIngredient>
   steps: Array<string | DishStep>
+  dish_role: string
+  protein_sources: string[]
+  serving_temperature: string
+  cooking_methods: string[]
+  spice_level: number
+  richness_level: number
+  carb_level: number
+  trait_source: string
+  trait_version: number
   cook_time: number
   difficulty: string
   remark: string
@@ -45,6 +54,15 @@ export interface DishInput {
   ingredients?: string
   seasonings?: string
   steps?: string
+  dish_role?: string
+  protein_sources?: string
+  serving_temperature?: string
+  cooking_methods?: string
+  spice_level?: number
+  richness_level?: number
+  carb_level?: number
+  trait_source?: string
+  trait_version?: number
   cook_time?: number
   difficulty?: string
   remark?: string
@@ -134,6 +152,7 @@ export interface WeekDayPlan {
 
 export interface WeekPlan {
   days: WeekDayPlan[]
+  warnings?: string[]
 }
 
 export type PlanProfile = "balanced" | "quick" | "light" | "spicy" | "favorite"
@@ -153,6 +172,23 @@ export interface WeekPlanPeriodPreferences {
 export interface WeekPlanPreferences {
   weekday: WeekPlanPeriodPreferences
   weekend: WeekPlanPeriodPreferences
+}
+
+export interface MenuRule {
+  id?: number
+  code: string
+  name: string
+  description: string
+  enabled: boolean
+  scope: string
+  rule_kind: string
+  severity: string
+  relaxable: boolean
+  expression: string
+  priority: number
+  message: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface ShoppingCategory {

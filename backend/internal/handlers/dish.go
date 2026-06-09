@@ -87,21 +87,30 @@ func GetDish(c *gin.Context) {
 }
 
 type CreateDishRequest struct {
-	Name        string `json:"name" binding:"required"`
-	ImageURL    string `json:"image_url"`
-	Images      string `json:"images"`
-	VideoURL    string `json:"video_url"`
-	Category    string `json:"category"`
-	MealType    string `json:"meal_type"`
-	Taste       string `json:"taste"`
-	Ingredients string `json:"ingredients"`
-	Seasonings  string `json:"seasonings"`
-	Steps       string `json:"steps"`
-	CookTime    int    `json:"cook_time"`
-	Difficulty  string `json:"difficulty"`
-	Remark      string `json:"remark"`
-	Tags        string `json:"tags"`
-	SortOrder   int    `json:"sort_order"`
+	Name               string `json:"name" binding:"required"`
+	ImageURL           string `json:"image_url"`
+	Images             string `json:"images"`
+	VideoURL           string `json:"video_url"`
+	Category           string `json:"category"`
+	MealType           string `json:"meal_type"`
+	Taste              string `json:"taste"`
+	Ingredients        string `json:"ingredients"`
+	Seasonings         string `json:"seasonings"`
+	Steps              string `json:"steps"`
+	DishRole           string `json:"dish_role"`
+	ProteinSources     string `json:"protein_sources"`
+	ServingTemperature string `json:"serving_temperature"`
+	CookingMethods     string `json:"cooking_methods"`
+	SpiceLevel         int    `json:"spice_level"`
+	RichnessLevel      int    `json:"richness_level"`
+	CarbLevel          int    `json:"carb_level"`
+	TraitSource        string `json:"trait_source"`
+	TraitVersion       int    `json:"trait_version"`
+	CookTime           int    `json:"cook_time"`
+	Difficulty         string `json:"difficulty"`
+	Remark             string `json:"remark"`
+	Tags               string `json:"tags"`
+	SortOrder          int    `json:"sort_order"`
 }
 
 func CreateDish(c *gin.Context) {
@@ -112,22 +121,31 @@ func CreateDish(c *gin.Context) {
 	}
 
 	dish := models.Dish{
-		Name:        req.Name,
-		ImageURL:    req.ImageURL,
-		Images:      req.Images,
-		VideoURL:    req.VideoURL,
-		Category:    req.Category,
-		MealType:    req.MealType,
-		Taste:       req.Taste,
-		Ingredients: req.Ingredients,
-		Seasonings:  req.Seasonings,
-		Steps:       req.Steps,
-		CookTime:    req.CookTime,
-		Difficulty:  req.Difficulty,
-		Remark:      req.Remark,
-		Tags:        req.Tags,
-		SortOrder:   req.SortOrder,
-		Enabled:     true,
+		Name:               req.Name,
+		ImageURL:           req.ImageURL,
+		Images:             req.Images,
+		VideoURL:           req.VideoURL,
+		Category:           req.Category,
+		MealType:           req.MealType,
+		Taste:              req.Taste,
+		Ingredients:        req.Ingredients,
+		Seasonings:         req.Seasonings,
+		Steps:              req.Steps,
+		DishRole:           req.DishRole,
+		ProteinSources:     req.ProteinSources,
+		ServingTemperature: req.ServingTemperature,
+		CookingMethods:     req.CookingMethods,
+		SpiceLevel:         req.SpiceLevel,
+		RichnessLevel:      req.RichnessLevel,
+		CarbLevel:          req.CarbLevel,
+		TraitSource:        req.TraitSource,
+		TraitVersion:       req.TraitVersion,
+		CookTime:           req.CookTime,
+		Difficulty:         req.Difficulty,
+		Remark:             req.Remark,
+		Tags:               req.Tags,
+		SortOrder:          req.SortOrder,
+		Enabled:            true,
 	}
 
 	if dish.MealType == "" {
@@ -151,6 +169,7 @@ func CreateDish(c *gin.Context) {
 	if dish.Tags == "" {
 		dish.Tags = "[]"
 	}
+	dish = services.ApplyDishTraitsForSave(dish, requestHasDishTraits(req))
 
 	if err := database.DB.Create(&dish).Error; err != nil {
 		utils.InternalError(c, "创建菜品失败")
@@ -190,6 +209,20 @@ func UpdateDish(c *gin.Context) {
 	dish.Remark = req.Remark
 	dish.Tags = req.Tags
 	dish.SortOrder = req.SortOrder
+	if requestHasDishTraits(req) {
+		dish.DishRole = req.DishRole
+		dish.ProteinSources = req.ProteinSources
+		dish.ServingTemperature = req.ServingTemperature
+		dish.CookingMethods = req.CookingMethods
+		dish.SpiceLevel = req.SpiceLevel
+		dish.RichnessLevel = req.RichnessLevel
+		dish.CarbLevel = req.CarbLevel
+		dish.TraitSource = req.TraitSource
+		dish.TraitVersion = req.TraitVersion
+		dish = services.ApplyDishTraitsForSave(dish, true)
+	} else if dish.TraitSource != "manual" {
+		dish = services.ApplyDishTraitsForSave(dish, false)
+	}
 
 	if err := database.DB.Save(&dish).Error; err != nil {
 		utils.InternalError(c, "更新菜品失败")
@@ -198,6 +231,17 @@ func UpdateDish(c *gin.Context) {
 
 	services.QueueAutoAchievementSync()
 	utils.Success(c, dish)
+}
+
+func requestHasDishTraits(req CreateDishRequest) bool {
+	return req.DishRole != "" ||
+		req.ProteinSources != "" ||
+		req.ServingTemperature != "" ||
+		req.CookingMethods != "" ||
+		req.SpiceLevel != 0 ||
+		req.RichnessLevel != 0 ||
+		req.CarbLevel != 0 ||
+		req.TraitSource == "manual"
 }
 
 func DeleteDish(c *gin.Context) {

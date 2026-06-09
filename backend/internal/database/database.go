@@ -42,6 +42,7 @@ func Init() error {
 		&models.Holiday{},
 		&models.Setting{},
 		&models.DishRecommendation{},
+		&models.MenuRule{},
 		&models.DayRating{},
 		&models.ShoppingCheck{},
 		&models.HomeInventory{},
@@ -51,6 +52,8 @@ func Init() error {
 	}
 
 	seedData()
+	backfillDishTraits()
+	seedMenuRules()
 	return nil
 }
 
@@ -168,6 +171,41 @@ func upsertStringArraySetting(key string, defaults []string) {
 	merged := appendMissingStringValues(existing, defaults)
 	if !sameStringValues(existing, merged) {
 		DB.Model(&models.Setting{}).Where("`key` = ?", key).Update("value", jsonArrayString(merged))
+	}
+}
+
+func backfillDishTraits() {
+	var rows []models.Dish
+	DB.Find(&rows)
+	for _, dish := range rows {
+		if dish.TraitSource == "manual" && dish.TraitVersion >= models.DishTraitVersion {
+			continue
+		}
+		if dish.TraitSource == "manual" {
+			continue
+		}
+		inferred := models.InferDishTraits(dish)
+		DB.Model(&models.Dish{}).Where("id = ?", dish.ID).Updates(map[string]any{
+			"dish_role":           inferred.DishRole,
+			"protein_sources":     inferred.ProteinSources,
+			"serving_temperature": inferred.ServingTemperature,
+			"cooking_methods":     inferred.CookingMethods,
+			"spice_level":         inferred.SpiceLevel,
+			"richness_level":      inferred.RichnessLevel,
+			"carb_level":          inferred.CarbLevel,
+			"trait_source":        inferred.TraitSource,
+			"trait_version":       inferred.TraitVersion,
+		})
+	}
+}
+
+func seedMenuRules() {
+	for _, rule := range models.DefaultMenuRules() {
+		var existing models.MenuRule
+		if err := DB.Where("code = ?", rule.Code).First(&existing).Error; err == nil {
+			continue
+		}
+		DB.Create(&rule)
 	}
 }
 

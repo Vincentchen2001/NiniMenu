@@ -1,411 +1,334 @@
-import type { WeekPlan, WeekPlanPreferences } from "@/types"
+import type { WeekPlan, Dish } from "@/types"
+import { getDishImageUrl } from "@/components/DishImage"
 
-const mealLabels = { lunch: "午餐", dinner: "晚餐" } as const
-const periodLabels = { weekday: "工作日", weekend: "周末" } as const
-const profileLabels = {
-  balanced: "均衡",
-  quick: "快手",
-  light: "清淡",
-  spicy: "想吃辣",
-  favorite: "收藏优先",
-} as const
+// 导出「一周菜单」长图：面向老人、在微信里直接看图。
+// 设计要点：单列竖向、大字、真实菜品图、午晚分段，去掉统计/配额等规划信息。
 
-const palette = {
-  paper: "#FFF7F0",
-  card: "#FFFFFF",
-  ink: "#202036",
-  muted: "#7E8194",
-  faint: "#A7A8B7",
-  line: "#F0DCD1",
+type MealKey = "lunch" | "dinner"
+type MealBlock = { meal: MealKey; dishes: Dish[] }
+type DayBlock = { day: WeekPlan["days"][number]; meals: MealBlock[]; height: number }
+
+// ---- 主题（逻辑坐标，基准宽 430px ≈ 微信全屏看图宽度）----
+const W = 430
+const SCALE = 3 // 输出 1290px 宽，微信缩放后依旧清晰
+const PAD_X = 22
+const PAD_TOP = 34
+const PAD_BOTTOM = 30
+
+const C = {
+  bg: "#F3E9DC",
+  card: "#FFFDFA",
+  ink: "#26233A",
+  ink2: "#403C58",
+  muted: "#A98F76",
+  line: "rgba(180, 140, 100, 0.24)",
   coral: "#E8734A",
-  coralSoft: "#FFE3D6",
-  green: "#2FAF83",
-  greenSoft: "#DDF6EA",
-  blue: "#3D6C8F",
-  blueSoft: "#EAF3F8",
-  gold: "#B8792F",
-  goldSoft: "#FFF0D4",
+  coralSoft: "#FCE3D6",
+  coralInk: "#BF4F2B",
+  green: "#2C9E78",
+  greenSoft: "#D6F0E4",
+  greenInk: "#1C7B5B",
+  ph1: "#F3D9C7",
+  ph2: "#E7BFA6",
 }
 
-type MealKey = keyof typeof mealLabels
-type PeriodKey = keyof typeof periodLabels
-
-type MealBlock = {
-  meal: MealKey
-  dishes: string[]
-  rows: ChipRow[]
-  height: number
+const mealMeta: Record<MealKey, { name: string; soft: string; ink: string }> = {
+  lunch: { name: "午餐", soft: C.coralSoft, ink: C.coralInk },
+  dinner: { name: "晚餐", soft: C.greenSoft, ink: C.greenInk },
 }
 
-type DayCard = {
-  day: WeekPlan["days"][number]
-  meals: MealBlock[]
-  height: number
-}
+const FONT = `"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`
+const font = (size: number, weight = 400) => `${weight} ${size}px ${FONT}`
 
-type ChipRow = Array<{ text: string; width: number }>
+// ---- 布局尺寸 ----
+const GRID_GAP = 12
+const CARD_W = (W - PAD_X * 2 - GRID_GAP) / 2
+const CARD_IMG_H = 104
+const CARD_NAME_H = 44
+const CARD_H = CARD_IMG_H + CARD_NAME_H
+const CARD_RADIUS = 16
 
-type Layout = {
-  cards: DayCard[]
-  height: number
-}
+const HEADER_H = 84
+const DAYHEAD_H = 40
+const MEAL_LABEL_H = 30
+const MEAL_GAP = 12
+const DAY_GAP = 16
 
-export function exportWeekPlanAsPng(plan: WeekPlan, prefs: WeekPlanPreferences) {
-  const days = plan.days || []
-  const fileName = `ninimenu-week-plan-${days[0]?.date || todayString()}-${timeString()}.png`
-  const width = 1240
-  const margin = 56
-  const columnGap = 24
-  const columnWidth = (width - margin * 2 - columnGap) / 2
-  const headerHeight = 348
-  const footerHeight = 64
+export async function exportWeekPlanAsPng(plan: WeekPlan): Promise<string | undefined> {
+  const days = (plan.days || []).filter((d) => d.lunch.length + d.dinner.length > 0)
+  if (days.length === 0) return undefined
 
+  // 预加载所有菜品图（失败的走占位，避免污染画布或卡住导出）
+  const dishes = days.flatMap((d) => [...d.lunch, ...d.dinner])
+  const imgMap = await preloadImages(dishes)
+
+  // 量算高度
+  const blocks: DayBlock[] = days.map((day) => {
+    const meals = buildMeals(day)
+    return { day, meals, height: measureDay(meals) }
+  })
+  let totalH = PAD_TOP + HEADER_H
+  blocks.forEach((b, i) => {
+    totalH += b.height
+    if (i < blocks.length - 1) totalH += DAY_GAP
+  })
+  totalH += PAD_BOTTOM
+
+  // 画布
   const canvas = document.createElement("canvas")
-  const scale = Math.max(1, Math.min(2, window.devicePixelRatio || 1))
+  canvas.width = Math.round(W * SCALE)
+  canvas.height = Math.round(totalH * SCALE)
   const ctx = canvas.getContext("2d")
-  if (!ctx) return
+  if (!ctx) return undefined
+  ctx.scale(SCALE, SCALE)
+  ctx.textBaseline = "alphabetic"
 
-  ctx.font = font(24, 700)
-  const layout = buildLayout(ctx, plan, columnWidth, headerHeight, footerHeight, margin)
+  // 背景
+  ctx.fillStyle = C.bg
+  ctx.fillRect(0, 0, W, totalH)
 
-  canvas.width = width * scale
-  canvas.height = layout.height * scale
-  canvas.style.width = `${width}px`
-  canvas.style.height = `${layout.height}px`
-  ctx.scale(scale, scale)
+  // 标题
+  let y = PAD_TOP
+  ctx.textAlign = "center"
+  ctx.fillStyle = C.ink
+  ctx.font = font(36, 900)
+  ctx.fillText("一周菜单", W / 2, y + 34)
+  ctx.fillStyle = C.muted
+  ctx.font = font(15, 600)
+  ctx.fillText(dateRange(plan), W / 2, y + 60)
+  ctx.textAlign = "left"
+  y += HEADER_H
 
-  drawBackground(ctx, width, layout.height)
-  drawHeader(ctx, plan, prefs, width, margin)
-  drawCards(ctx, layout.cards, margin, headerHeight, columnWidth, columnGap)
-  drawFooter(ctx, width, layout.height, margin)
+  // 每天
+  blocks.forEach((block, i) => {
+    drawDay(ctx, block, imgMap, y)
+    y += block.height
+    if (i < blocks.length - 1) y += DAY_GAP
+  })
 
+  const fileName = `一周菜单-${days[0].date}.png`
   const link = document.createElement("a")
   link.download = fileName
   link.href = canvas.toDataURL("image/png")
   link.click()
-
   return fileName
 }
 
-function buildLayout(
-  ctx: CanvasRenderingContext2D,
-  plan: WeekPlan,
-  columnWidth: number,
-  headerHeight: number,
-  footerHeight: number,
-  margin: number,
-): Layout {
-  const cards = (plan.days || []).map((day) => buildDayCard(ctx, day, columnWidth))
-  const columnHeights = [0, 0]
-  cards.forEach((card, index) => {
-    const column = index % 2
-    columnHeights[column] += card.height + 24
+function buildMeals(day: WeekPlan["days"][number]): MealBlock[] {
+  const meals: MealBlock[] = []
+  if (day.lunch.length > 0) meals.push({ meal: "lunch", dishes: day.lunch })
+  if (day.dinner.length > 0) meals.push({ meal: "dinner", dishes: day.dinner })
+  return meals
+}
+
+function measureDay(meals: MealBlock[]): number {
+  let h = DAYHEAD_H
+  meals.forEach((m, i) => {
+    const rows = Math.ceil(m.dishes.length / 2)
+    h += MEAL_LABEL_H + rows * CARD_H + (rows - 1) * GRID_GAP
+    if (i < meals.length - 1) h += MEAL_GAP
   })
-  const gridHeight = Math.max(columnHeights[0], columnHeights[1]) - (cards.length > 0 ? 24 : 0)
-  return {
-    cards,
-    height: Math.max(900, headerHeight + gridHeight + footerHeight + margin),
-  }
+  return h
 }
 
-function buildDayCard(ctx: CanvasRenderingContext2D, day: WeekPlan["days"][number], width: number): DayCard {
-  const contentWidth = width - 48
-  const meals: MealBlock[] = [
-    ...(day.lunch.length > 0 ? [buildMealBlock(ctx, "lunch", day.lunch.map((dish) => dish.name), contentWidth)] : []),
-    ...(day.dinner.length > 0 ? [buildMealBlock(ctx, "dinner", day.dinner.map((dish) => dish.name), contentWidth)] : []),
-  ]
-  const mealsHeight = meals.reduce((sum, meal) => sum + meal.height, 0) + Math.max(0, meals.length - 1) * 14
-  return {
-    day,
-    meals,
-    height: Math.max(176, 86 + (meals.length === 0 ? 54 : mealsHeight) + 28),
-  }
-}
-
-function buildMealBlock(ctx: CanvasRenderingContext2D, meal: MealKey, dishes: string[], width: number): MealBlock {
-  ctx.font = font(21, 700)
-  const rows = wrapChips(ctx, dishes, width)
-  return {
-    meal,
-    dishes,
-    rows,
-    height: 36 + rows.length * 40,
-  }
-}
-
-function wrapChips(ctx: CanvasRenderingContext2D, names: string[], width: number) {
-  const rows: ChipRow[] = []
-  let row: ChipRow = []
-  let rowWidth = 0
-  names.forEach((name) => {
-    const chipWidth = Math.min(width, Math.ceil(ctx.measureText(name).width) + 30)
-    const gap = row.length > 0 ? 10 : 0
-    if (row.length > 0 && rowWidth + gap + chipWidth > width) {
-      rows.push(row)
-      row = []
-      rowWidth = 0
-    }
-    row.push({ text: name, width: chipWidth })
-    rowWidth += (row.length > 1 ? 10 : 0) + chipWidth
-  })
-  if (row.length > 0) rows.push(row)
-  return rows
-}
-
-function drawBackground(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  ctx.fillStyle = palette.paper
-  ctx.fillRect(0, 0, width, height)
-
-  ctx.fillStyle = "rgba(232, 115, 74, 0.08)"
-  for (let x = 34; x < width; x += 46) {
-    for (let y = 36; y < height; y += 46) {
-      ctx.beginPath()
-      ctx.arc(x, y, 1.4, 0, Math.PI * 2)
-      ctx.fill()
-    }
-  }
-}
-
-function drawHeader(ctx: CanvasRenderingContext2D, plan: WeekPlan, prefs: WeekPlanPreferences, width: number, margin: number) {
-  const top = 42
-  const headerWidth = width - margin * 2
-  const headerInnerX = margin + 30
-  const preferenceGap = 20
-  const preferenceWidth = (headerWidth - 60 - preferenceGap) / 2
-  drawRoundRect(ctx, margin, top, headerWidth, 262, 34, palette.card)
-  strokeRoundRect(ctx, margin, top, headerWidth, 262, 34, "rgba(240, 220, 209, 0.95)", 2)
-
-  drawPill(ctx, headerInnerX, top + 28, "NiniMenu", palette.ink, "#FFFFFF", 154, 42, 20, 800)
-  ctx.fillStyle = palette.ink
-  ctx.font = font(52, 850)
-  ctx.fillText("一周菜单", headerInnerX, top + 106)
-  ctx.fillStyle = palette.muted
-  ctx.font = font(24, 650)
-  ctx.fillText(dateRangeText(plan), headerInnerX + 4, top + 150)
-
-  const total = dishCount(plan)
-  const skipped = skippedMealCount(plan)
-  drawMetric(ctx, width - margin - 286, top + 32, "总菜数", `${total}`, palette.coral, palette.coralSoft)
-  drawMetric(ctx, width - margin - 144, top + 32, "已跳过", `${skipped}`, palette.green, palette.greenSoft)
-
-  drawPreferenceCard(ctx, headerInnerX, top + 176, "weekday", prefs.weekday, preferenceWidth, palette.coral, palette.coralSoft)
-  drawPreferenceCard(ctx, headerInnerX + preferenceWidth + preferenceGap, top + 176, "weekend", prefs.weekend, preferenceWidth, palette.green, palette.greenSoft)
-}
-
-function drawMetric(
+function drawDay(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  label: string,
-  value: string,
-  color: string,
-  bg: string,
+  block: DayBlock,
+  imgMap: Map<string, HTMLImageElement>,
+  top: number,
 ) {
-  drawRoundRect(ctx, x, y, 112, 78, 24, bg)
-  ctx.fillStyle = color
-  ctx.font = font(19, 800)
-  ctx.fillText(label, x + 18, y + 28)
-  ctx.fillStyle = palette.ink
-  ctx.font = font(32, 850)
-  ctx.fillText(value, x + 18, y + 62)
-}
+  const { day, meals } = block
 
-function drawPreferenceCard(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  period: PeriodKey,
-  pref: WeekPlanPreferences[PeriodKey],
-  width: number,
-  color: string,
-  bg: string,
-) {
-  drawRoundRect(ctx, x, y, width, 64, 22, bg)
-  ctx.fillStyle = color
-  ctx.font = font(20, 850)
-  ctx.fillText(periodLabels[period], x + 18, y + 26)
-  ctx.fillStyle = palette.ink
-  ctx.font = font(20, 800)
-  ctx.fillText(profileLabels[pref.profile], x + 92, y + 26)
-  ctx.fillStyle = color
-  ctx.font = font(18, 750)
-  ctx.fillText(`午 ${quotaText(pref.lunch)}`, x + 18, y + 52)
-  ctx.fillText(`晚 ${quotaText(pref.dinner)}`, x + 238, y + 52)
-}
+  // 星期 + 日期 + 横线
+  ctx.fillStyle = C.ink
+  ctx.font = font(23, 900)
+  ctx.fillText(day.day_name, PAD_X, top + 23)
+  const wdW = ctx.measureText(day.day_name).width
+  ctx.fillStyle = C.muted
+  ctx.font = font(14, 600)
+  ctx.fillText(formatDate(day.date), PAD_X + wdW + 10, top + 22)
+  const dtW = ctx.measureText(formatDate(day.date)).width
+  const lineX = PAD_X + wdW + 10 + dtW + 12
+  ctx.strokeStyle = C.line
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(lineX, top + 16)
+  ctx.lineTo(W - PAD_X, top + 16)
+  ctx.stroke()
 
-function drawCards(
-  ctx: CanvasRenderingContext2D,
-  cards: DayCard[],
-  margin: number,
-  startY: number,
-  columnWidth: number,
-  columnGap: number,
-) {
-  const columnY = [startY, startY]
-  cards.forEach((card, index) => {
-    const column = index % 2
-    const x = margin + column * (columnWidth + columnGap)
-    drawDayCard(ctx, card, x, columnY[column], columnWidth, index)
-    columnY[column] += card.height + 24
-  })
-}
-
-function drawDayCard(ctx: CanvasRenderingContext2D, card: DayCard, x: number, y: number, width: number, index: number) {
-  drawRoundRect(ctx, x, y, width, card.height, 28, palette.card)
-  strokeRoundRect(ctx, x, y, width, card.height, 28, "rgba(240, 220, 209, 0.92)", 2)
-
-  const accent = index >= 5 ? palette.green : palette.coral
-  drawRoundRect(ctx, x, y, 8, card.height, 4, accent)
-
-  ctx.fillStyle = palette.ink
-  ctx.font = font(35, 850)
-  ctx.fillText(card.day.day_name, x + 24, y + 48)
-  ctx.fillStyle = palette.faint
-  ctx.font = font(22, 750)
-  const date = card.day.date.slice(5)
-  ctx.fillText(date, x + width - 24 - ctx.measureText(date).width, y + 44)
-
-  const total = card.day.lunch.length + card.day.dinner.length
-  drawSmallTag(ctx, x + 24, y + 64, `${total} 道`, palette.blueSoft, palette.blue)
-
-  if (card.meals.length === 0) {
-    ctx.fillStyle = palette.muted
-    ctx.font = font(23, 700)
-    ctx.fillText("当天不推荐", x + 24, y + 126)
-    return
-  }
-
-  let mealY = y + 98
-  card.meals.forEach((meal, mealIndex) => {
-    if (mealIndex > 0) {
-      ctx.strokeStyle = "rgba(240, 220, 209, 0.75)"
-      ctx.lineWidth = 1.5
-      ctx.beginPath()
-      ctx.moveTo(x + 24, mealY - 12)
-      ctx.lineTo(x + width - 24, mealY - 12)
-      ctx.stroke()
-    }
-    drawMealBlock(ctx, meal, x + 24, mealY, width - 48)
-    mealY += meal.height + 14
-  })
-}
-
-function drawMealBlock(ctx: CanvasRenderingContext2D, block: MealBlock, x: number, y: number, width: number) {
-  const color = block.meal === "lunch" ? palette.coral : palette.green
-  const soft = block.meal === "lunch" ? palette.coralSoft : palette.greenSoft
-  drawSmallTag(ctx, x, y, mealLabels[block.meal], soft, color)
-
-  ctx.fillStyle = palette.muted
-  ctx.font = font(18, 700)
-  const countText = `${block.dishes.length} 道`
-  ctx.fillText(countText, x + width - ctx.measureText(countText).width, y + 24)
-
-  let rowY = y + 42
-  block.rows.forEach((row) => {
-    let chipX = x
-    row.forEach((chip) => {
-      drawRoundRect(ctx, chipX, rowY, chip.width, 30, 15, "#FFFDFC")
-      strokeRoundRect(ctx, chipX, rowY, chip.width, 30, 15, "rgba(229, 214, 205, 0.85)", 1)
-      ctx.fillStyle = palette.ink
-      ctx.font = font(20, 750)
-      ctx.fillText(chip.text, chipX + 15, rowY + 22)
-      chipX += chip.width + 10
+  let y = top + DAYHEAD_H
+  meals.forEach((m, i) => {
+    drawMealLabel(ctx, PAD_X, y, m.meal)
+    y += MEAL_LABEL_H
+    m.dishes.forEach((dish, idx) => {
+      const col = idx % 2
+      const row = Math.floor(idx / 2)
+      const cx = PAD_X + col * (CARD_W + GRID_GAP)
+      const cy = y + row * (CARD_H + GRID_GAP)
+      const url = getDishImageUrl(dish) || ""
+      drawCard(ctx, cx, cy, dish, imgMap.get(url))
     })
-    rowY += 40
+    const rows = Math.ceil(m.dishes.length / 2)
+    y += rows * CARD_H + (rows - 1) * GRID_GAP
+    if (i < meals.length - 1) y += MEAL_GAP
   })
 }
 
-function drawFooter(ctx: CanvasRenderingContext2D, width: number, height: number, margin: number) {
-  ctx.fillStyle = palette.faint
-  ctx.font = font(18, 650)
-  ctx.fillText("Generated by NiniMenu", margin, height - 32)
-  const text = todayString()
-  ctx.fillText(text, width - margin - ctx.measureText(text).width, height - 32)
+function drawMealLabel(ctx: CanvasRenderingContext2D, x: number, y: number, meal: MealKey) {
+  const m = mealMeta[meal]
+  ctx.font = font(13, 800)
+  const tw = ctx.measureText(m.name).width
+  const pillW = tw + 22
+  const pillH = 24
+  roundRect(ctx, x, y, pillW, pillH, 12)
+  ctx.fillStyle = m.soft
+  ctx.fill()
+  ctx.fillStyle = m.ink
+  ctx.textBaseline = "middle"
+  ctx.fillText(m.name, x + 11, y + pillH / 2 + 1)
+  ctx.textBaseline = "alphabetic"
 }
 
-function drawPill(
+function drawCard(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
-  text: string,
-  bg: string,
-  color: string,
-  minWidth: number,
-  height: number,
-  size: number,
-  weight: number,
+  dish: Dish,
+  img: HTMLImageElement | undefined,
 ) {
-  ctx.font = font(size, weight)
-  const pillWidth = Math.max(minWidth, ctx.measureText(text).width + 34)
-  drawRoundRect(ctx, x, y, pillWidth, height, height / 2, bg)
-  ctx.fillStyle = color
-  ctx.fillText(text, x + 17, y + Math.round(height * 0.68))
+  // 卡片底（带柔和阴影）
+  ctx.save()
+  ctx.shadowColor = "rgba(150, 100, 60, 0.16)"
+  ctx.shadowBlur = 14
+  ctx.shadowOffsetY = 6
+  roundRect(ctx, x, y, CARD_W, CARD_H, CARD_RADIUS)
+  ctx.fillStyle = C.card
+  ctx.fill()
+  ctx.restore()
+
+  // 菜品图（cover 裁剪 + 顶部圆角）或占位
+  if (img && img.naturalWidth > 0) {
+    drawImageCover(ctx, img, x, y, CARD_W, CARD_IMG_H, CARD_RADIUS)
+  } else {
+    drawPlaceholder(ctx, x, y, CARD_W, CARD_IMG_H, CARD_RADIUS, dish.name)
+  }
+
+  // 菜名（居中，过长自动缩字号 / 省略）
+  ctx.fillStyle = C.ink2
+  ctx.textAlign = "center"
+  let size = 18
+  ctx.font = font(size, 700)
+  while (ctx.measureText(dish.name).width > CARD_W - 16 && size > 13) {
+    size -= 1
+    ctx.font = font(size, 700)
+  }
+  ctx.fillText(ellipsize(ctx, dish.name, CARD_W - 16), x + CARD_W / 2, y + CARD_IMG_H + 28)
+  ctx.textAlign = "left"
 }
 
-function drawSmallTag(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, bg: string, color: string) {
-  ctx.font = font(20, 850)
-  const width = Math.ceil(ctx.measureText(text).width) + 30
-  drawRoundRect(ctx, x, y, width, 32, 16, bg)
-  ctx.fillStyle = color
-  ctx.fillText(text, x + 15, y + 23)
+function drawImageCover(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+) {
+  ctx.save()
+  roundRectTop(ctx, x, y, w, h, radius)
+  ctx.clip()
+  const scale = Math.max(w / img.naturalWidth, h / img.naturalHeight)
+  const dw = img.naturalWidth * scale
+  const dh = img.naturalHeight * scale
+  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh)
+  ctx.restore()
 }
 
-function quotaText(quota: { meat_count: number; veg_count: number; soup_count: number }) {
-  const total = quota.meat_count + quota.veg_count + quota.soup_count
-  if (total === 0) return "跳过"
-  return `${quota.meat_count}荤 ${quota.veg_count}素 ${quota.soup_count}汤`
+function drawPlaceholder(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+  name: string,
+) {
+  ctx.save()
+  roundRectTop(ctx, x, y, w, h, radius)
+  ctx.clip()
+  const g = ctx.createLinearGradient(x, y, x + w, y + h)
+  g.addColorStop(0, C.ph1)
+  g.addColorStop(1, C.ph2)
+  ctx.fillStyle = g
+  ctx.fillRect(x, y, w, h)
+  ctx.fillStyle = "rgba(255, 255, 255, 0.9)"
+  ctx.font = font(34, 800)
+  ctx.textAlign = "center"
+  ctx.textBaseline = "middle"
+  ctx.fillText(name.slice(0, 1), x + w / 2, y + h / 2)
+  ctx.textAlign = "left"
+  ctx.textBaseline = "alphabetic"
+  ctx.restore()
 }
 
-function dishCount(plan: WeekPlan) {
-  return (plan.days || []).reduce((sum, day) => sum + day.lunch.length + day.dinner.length, 0)
+async function preloadImages(dishes: Dish[]): Promise<Map<string, HTMLImageElement>> {
+  const urls = Array.from(
+    new Set(dishes.map((d) => getDishImageUrl(d)).filter((u): u is string => !!u)),
+  )
+  const map = new Map<string, HTMLImageElement>()
+  await Promise.all(
+    urls.map(
+      (url) =>
+        new Promise<void>((resolve) => {
+          const img = new Image()
+          img.crossOrigin = "anonymous"
+          img.onload = () => {
+            map.set(url, img)
+            resolve()
+          }
+          img.onerror = () => resolve()
+          img.src = url
+        }),
+    ),
+  )
+  return map
 }
 
-function skippedMealCount(plan: WeekPlan) {
-  return (plan.days || []).reduce((sum, day) => sum + (day.lunch.length === 0 ? 1 : 0) + (day.dinner.length === 0 ? 1 : 0), 0)
+function formatDate(date: string): string {
+  const parts = date.split("-")
+  if (parts.length < 3) return date
+  return `${Number(parts[1])}月${Number(parts[2])}日`
 }
 
-function dateRangeText(plan: WeekPlan) {
+function dateRange(plan: WeekPlan): string {
   const days = plan.days || []
-  if (days.length === 0) return "暂无日期"
+  if (days.length === 0) return ""
   const first = days[0]?.date
   const last = days[days.length - 1]?.date
-  return first && last ? `${first} - ${last}` : first || "暂无日期"
+  if (!first) return ""
+  return last && last !== first ? `${formatDate(first)} — ${formatDate(last)}` : formatDate(first)
 }
 
-function todayString() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+function ellipsize(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text
+  let t = text
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxWidth) t = t.slice(0, -1)
+  return `${t}…`
 }
 
-function timeString() {
-  const d = new Date()
-  return `${String(d.getHours()).padStart(2, "0")}${String(d.getMinutes()).padStart(2, "0")}`
-}
-
-function font(size: number, weight: number) {
-  return `${weight} ${size}px PingFang SC, Hiragino Sans GB, Microsoft YaHei, sans-serif`
-}
-
-function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number, fill: string) {
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath()
-  ctx.roundRect(x, y, width, height, radius)
-  ctx.fillStyle = fill
-  ctx.fill()
+  ctx.roundRect(x, y, w, h, r)
 }
 
-function strokeRoundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-  stroke: string,
-  lineWidth: number,
-) {
+function roundRectTop(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath()
-  ctx.roundRect(x, y, width, height, radius)
-  ctx.strokeStyle = stroke
-  ctx.lineWidth = lineWidth
-  ctx.stroke()
+  ctx.moveTo(x, y + h)
+  ctx.lineTo(x, y + r)
+  ctx.arcTo(x, y, x + r, y, r)
+  ctx.lineTo(x + w - r, y)
+  ctx.arcTo(x + w, y, x + w, y + r, r)
+  ctx.lineTo(x + w, y + h)
+  ctx.closePath()
 }

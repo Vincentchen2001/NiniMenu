@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { dishesApi, weekPlanApi } from "@/api"
-import type { Dish, DishIngredient, MealQuota, PlanProfile, WeekPlan as WeekPlanType, WeekPlanPeriodPreferences, WeekPlanPreferences } from "@/types"
+import type { Dish, DishIngredient, MealQuota, MenuRule, PlanProfile, WeekPlan as WeekPlanType, WeekPlanPeriodPreferences, WeekPlanPreferences } from "@/types"
 import { asArray } from "@/lib/utils"
 import { exportWeekPlanAsPng } from "@/lib/weekPlanExport"
 import DishImage from "@/components/DishImage"
@@ -12,10 +12,13 @@ import {
   CalendarCheck,
   ChevronDown,
   ChefHat,
+  CheckCircle2,
+  Code2,
   Download,
   Flame,
   Heart,
   Leaf,
+  Lock,
   Moon,
   Plus,
   RefreshCw,
@@ -92,6 +95,7 @@ const mealMeta: Record<MealType, {
 
 function normalizePlan(plan?: WeekPlanType): WeekPlanType {
   return {
+    warnings: plan?.warnings || [],
     days: (plan?.days || []).map((day) => ({
       ...day,
       lunch: day.lunch || [],
@@ -579,6 +583,167 @@ function DishPickerModal({
   )
 }
 
+function MenuRuleEditor({
+  rules,
+  canEdit,
+  dirty,
+  busy,
+  onChange,
+  onAdd,
+  onValidate,
+  onSave,
+}: {
+  rules: MenuRule[]
+  canEdit: boolean
+  dirty: boolean
+  busy: boolean
+  onChange: (index: number, patch: Partial<MenuRule>) => void
+  onAdd: () => void
+  onValidate: (rule: MenuRule) => void
+  onSave: () => void
+}) {
+  return (
+    <section className="rounded-[24px] border border-border bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-bg text-text3">
+            <Code2 size={18} strokeWidth={2.35} />
+          </span>
+          <div className="min-w-0">
+            <div className="text-[15px] font-extrabold text-text">表达式规则</div>
+            <div className="truncate text-[11px] font-medium text-text3">{rules.length} 条 · {canEdit ? "管理员可编辑" : "只读"}</div>
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-extrabold ${canEdit ? "bg-mint-light text-mint" : "bg-bg text-text3"}`}>
+          {canEdit ? "ADMIN" : <span className="inline-flex items-center gap-1"><Lock size={11} />只读</span>}
+        </span>
+      </div>
+
+      <div className="grid gap-2">
+        {rules.map((rule, index) => (
+          <div key={rule.code || index} className="rounded-2xl border border-border bg-bg/65 p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={rule.enabled}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { enabled: event.target.checked })}
+                className="h-4 w-4 accent-primary"
+                aria-label="启用规则"
+              />
+              <input
+                value={rule.name}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { name: event.target.value })}
+                className="min-w-0 flex-1 rounded-xl border border-border bg-card px-3 py-2 text-sm font-extrabold text-text outline-none disabled:text-text2"
+              />
+              <button
+                onClick={() => onValidate(rule)}
+                disabled={!canEdit || busy}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-card text-text3 transition-all hover:text-primary disabled:opacity-45"
+                aria-label="校验规则"
+                title="校验"
+              >
+                <CheckCircle2 size={17} strokeWidth={2.35} />
+              </button>
+            </div>
+            <div className="mb-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <input
+                value={rule.code}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { code: event.target.value })}
+                className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none disabled:text-text3"
+                placeholder="code"
+              />
+              <select
+                value={rule.rule_kind}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { rule_kind: event.target.value })}
+                className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none"
+              >
+                <option value="constraint">约束</option>
+                <option value="score">打分</option>
+              </select>
+              <select
+                value={rule.severity}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { severity: event.target.value })}
+                className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none"
+              >
+                <option value="hard">硬规则</option>
+                <option value="soft">软规则</option>
+              </select>
+              <input
+                type="number"
+                value={rule.priority}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { priority: Number(event.target.value) })}
+                className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none"
+                aria-label="优先级"
+              />
+            </div>
+            <div className="mb-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <select
+                value={rule.scope}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { scope: event.target.value })}
+                className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none"
+              >
+                <option value="candidate">候选</option>
+                <option value="meal">同餐</option>
+                <option value="day">同日</option>
+                <option value="week">全周</option>
+              </select>
+              <label className="flex min-h-9 items-center gap-2 rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2">
+                <input
+                  type="checkbox"
+                  checked={rule.relaxable}
+                  disabled={!canEdit}
+                  onChange={(event) => onChange(index, { relaxable: event.target.checked })}
+                  className="h-4 w-4 accent-primary"
+                />
+                可降级
+              </label>
+              <input
+                value={rule.description}
+                disabled={!canEdit}
+                onChange={(event) => onChange(index, { description: event.target.value })}
+                className="col-span-2 rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-medium text-text2 outline-none disabled:text-text3"
+                placeholder="规则说明"
+              />
+            </div>
+            <textarea
+              value={rule.expression}
+              disabled={!canEdit}
+              onChange={(event) => onChange(index, { expression: event.target.value })}
+              rows={2}
+              className="mb-2 w-full rounded-xl border border-border bg-card px-3 py-2 font-mono text-[12px] leading-relaxed text-text outline-none disabled:text-text3"
+            />
+            <input
+              value={rule.message}
+              disabled={!canEdit}
+              onChange={(event) => onChange(index, { message: event.target.value })}
+              className="w-full rounded-xl border border-border bg-card px-3 py-2 text-[12px] font-medium text-text2 outline-none disabled:text-text3"
+              placeholder="命中提示"
+            />
+          </div>
+        ))}
+      </div>
+
+      {canEdit && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button onClick={onAdd} disabled={busy} className="flex h-10 items-center justify-center rounded-2xl bg-bg text-sm font-extrabold text-text2 transition-all active:scale-95 disabled:opacity-45">
+            新增规则
+          </button>
+          <button onClick={onSave} disabled={busy || !dirty} className="flex h-10 items-center justify-center rounded-2xl bg-primary text-sm font-extrabold text-white transition-all active:scale-95 disabled:opacity-45">
+            保存规则
+          </button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function LoadingState() {
   return (
     <div className="px-5 py-4">
@@ -596,10 +761,13 @@ export default function WeekPlan() {
   const qc = useQueryClient()
   const [draftPlan, setDraftPlan] = useState<WeekPlanType>({ days: [] })
   const [draftPrefs, setDraftPrefs] = useState<WeekPlanPreferences>(defaultPrefs)
+  const [draftRules, setDraftRules] = useState<MenuRule[]>([])
   const [dirtyPlan, setDirtyPlan] = useState(false)
   const [dirtyPrefs, setDirtyPrefs] = useState(false)
+  const [dirtyRules, setDirtyRules] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [picker, setPicker] = useState<{ date: string; meal: MealType } | null>(null)
+  const canEditRules = !!localStorage.getItem("token")
 
   const { data: serverPlan, isLoading: planLoading } = useQuery({
     queryKey: ["week-plan"],
@@ -609,6 +777,10 @@ export default function WeekPlan() {
     queryKey: ["week-plan", "preferences"],
     queryFn: () => weekPlanApi.preferences(),
   })
+  const { data: serverRules, isLoading: rulesLoading } = useQuery({
+    queryKey: ["week-plan", "rules"],
+    queryFn: () => weekPlanApi.rules(),
+  })
 
   useEffect(() => {
     if (serverPlan && !dirtyPlan) setDraftPlan(normalizePlan(serverPlan))
@@ -617,6 +789,10 @@ export default function WeekPlan() {
   useEffect(() => {
     if (serverPrefs && !dirtyPrefs) setDraftPrefs(normalizePrefs(serverPrefs))
   }, [dirtyPrefs, serverPrefs])
+
+  useEffect(() => {
+    if (serverRules && !dirtyRules) setDraftRules(serverRules)
+  }, [dirtyRules, serverRules])
 
   const activePickerDay = picker ? draftPlan.days.find((day) => day.date === picker.date) : null
   const selectedIds = useMemo(() => {
@@ -671,8 +847,26 @@ export default function WeekPlan() {
     onError: () => toast.error("应用设置失败"),
   })
 
-  const busy = regenerateMut.isPending || savePlanMut.isPending || applyPrefsMut.isPending
-  const loading = planLoading || prefsLoading
+  const saveRulesMut = useMutation({
+    mutationFn: () => weekPlanApi.updateRules(draftRules),
+    onSuccess: (rules) => {
+      setDraftRules(rules)
+      setDirtyRules(false)
+      qc.setQueryData(["week-plan", "rules"], rules)
+      qc.invalidateQueries({ queryKey: ["week-plan"] })
+      toast.success("规则已保存")
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : "保存规则失败"),
+  })
+
+  const validateRuleMut = useMutation({
+    mutationFn: (rule: MenuRule) => weekPlanApi.validateRule(rule),
+    onSuccess: () => toast.success("表达式有效"),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "表达式无效"),
+  })
+
+  const busy = regenerateMut.isPending || savePlanMut.isPending || applyPrefsMut.isPending || saveRulesMut.isPending || validateRuleMut.isPending
+  const loading = planLoading || prefsLoading || rulesLoading
 
   function updateProfile(period: PeriodKey, profile: PlanProfile) {
     setDraftPrefs((prev) => normalizePrefs({
@@ -695,6 +889,7 @@ export default function WeekPlan() {
 
   function addDish(date: string, meal: MealType, dish: Dish) {
     setDraftPlan((prev) => ({
+      warnings: prev.warnings,
       days: prev.days.map((day) => {
         if (day.date !== date) return day
         return { ...day, [meal]: uniqueById([...day[meal], dish]) }
@@ -705,6 +900,7 @@ export default function WeekPlan() {
 
   function removeDish(date: string, meal: MealType, dishId: number) {
     setDraftPlan((prev) => ({
+      warnings: prev.warnings,
       days: prev.days.map((day) => {
         if (day.date !== date) return day
         return { ...day, [meal]: day[meal].filter((dish) => dish.id !== dishId) }
@@ -713,13 +909,50 @@ export default function WeekPlan() {
     setDirtyPlan(true)
   }
 
-  function exportPlan() {
+  function updateRule(index: number, patch: Partial<MenuRule>) {
+    setDraftRules((prev) => prev.map((rule, i) => i === index ? { ...rule, ...patch } : rule))
+    setDirtyRules(true)
+  }
+
+  function addRule() {
+    setDraftRules((prev) => [
+      ...prev,
+      {
+        code: `custom_rule_${Date.now()}`,
+        name: "自定义规则",
+        description: "",
+        enabled: true,
+        scope: "meal",
+        rule_kind: "score",
+        severity: "soft",
+        relaxable: true,
+        expression: "0",
+        priority: 500,
+        message: "",
+      },
+    ])
+    setDirtyRules(true)
+  }
+
+  const [exporting, setExporting] = useState(false)
+
+  async function exportPlan() {
     if (draftPlan.days.length === 0) {
       toast.error("暂无可导出的菜单")
       return
     }
-    const fileName = exportWeekPlanAsPng(draftPlan, draftPrefs)
-    if (fileName) toast.success(`已开始下载：${fileName}`)
+    if (exporting) return
+    setExporting(true)
+    const toastId = toast.loading("正在生成菜单图片…")
+    try {
+      const fileName = await exportWeekPlanAsPng(draftPlan)
+      if (fileName) toast.success("图片已生成，请在下载中查看", { id: toastId })
+      else toast.error("暂无可导出的菜单", { id: toastId })
+    } catch {
+      toast.error("导出失败，请重试", { id: toastId })
+    } finally {
+      setExporting(false)
+    }
   }
 
   if (loading && draftPlan.days.length === 0) return <LoadingState />
@@ -734,10 +967,10 @@ export default function WeekPlan() {
           <div className="flex items-center gap-2">
             <button
               onClick={exportPlan}
-              disabled={draftPlan.days.length === 0}
+              disabled={draftPlan.days.length === 0 || exporting}
               className="flex h-9 w-9 items-center justify-center rounded-full bg-card text-text3 shadow-sm transition-all hover:bg-mint-light hover:text-mint active:scale-95 disabled:opacity-45"
               aria-label="导出菜单"
-              title="导出"
+              title={exporting ? "生成中…" : "导出"}
             >
               <Download size={17} strokeWidth={2.35} />
             </button>
@@ -767,7 +1000,7 @@ export default function WeekPlan() {
             </div>
             <div className="rounded-2xl bg-bg px-3 py-3">
               <div className="text-[11px] font-bold text-text3">状态</div>
-              <div className="mt-1 truncate text-[13px] font-extrabold text-text">{dirtyPlan || dirtyPrefs ? "有改动" : "已同步"}</div>
+              <div className="mt-1 truncate text-[13px] font-extrabold text-text">{dirtyPlan || dirtyPrefs || dirtyRules ? "有改动" : "已同步"}</div>
             </div>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
@@ -776,7 +1009,7 @@ export default function WeekPlan() {
               className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-primary-light text-sm font-extrabold text-primary transition-all active:scale-95"
             >
               <Settings2 size={17} strokeWidth={2.4} />
-              {settingsOpen ? "收起设置" : dirtyPrefs ? "设置待应用" : "设置"}
+              {settingsOpen ? "收起设置" : dirtyPrefs || dirtyRules ? "设置待应用" : "设置"}
             </button>
             <button
               onClick={() => regenerateMut.mutate()}
@@ -787,6 +1020,14 @@ export default function WeekPlan() {
               重生成
             </button>
           </div>
+          {draftPlan.warnings && draftPlan.warnings.length > 0 && (
+            <div className="mt-3 rounded-2xl border border-primary/20 bg-primary-light/70 px-3 py-2">
+              {draftPlan.warnings.slice(0, 3).map((warning) => (
+                <div key={warning} className="text-[11px] font-semibold leading-relaxed text-primary">{warning}</div>
+              ))}
+              {draftPlan.warnings.length > 3 && <div className="text-[11px] font-semibold text-primary/70">还有 {draftPlan.warnings.length - 3} 条提示</div>}
+            </div>
+          )}
         </section>
 
         <section className="mb-4 overflow-hidden rounded-[24px] border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
@@ -801,7 +1042,7 @@ export default function WeekPlan() {
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 items-center gap-2">
                 <span className="text-[15px] font-extrabold text-text">推荐设置</span>
-                {dirtyPrefs && <span className="shrink-0 rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-extrabold text-primary">待应用</span>}
+                {(dirtyPrefs || dirtyRules) && <span className="shrink-0 rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-extrabold text-primary">待应用</span>}
               </span>
               <span className="mt-1 block truncate text-[11px] font-medium text-text3">
                 {periodSummary("weekday", draftPrefs.weekday)} / {periodSummary("weekend", draftPrefs.weekend)}
@@ -825,6 +1066,16 @@ export default function WeekPlan() {
                   onQuotaChange={(meal, kind, next) => updateQuota(period, meal, kind, next)}
                 />
               ))}
+              <MenuRuleEditor
+                rules={draftRules}
+                canEdit={canEditRules}
+                dirty={dirtyRules}
+                busy={busy}
+                onChange={updateRule}
+                onAdd={addRule}
+                onValidate={(rule) => validateRuleMut.mutate(rule)}
+                onSave={() => saveRulesMut.mutate()}
+              />
               <button
                 onClick={() => applyPrefsMut.mutate()}
                 disabled={busy || !dirtyPrefs}

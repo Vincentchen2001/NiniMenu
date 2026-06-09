@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"ninimenu/internal/database"
@@ -12,6 +13,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 )
 
 type WeekDayPlan struct {
@@ -22,7 +26,8 @@ type WeekDayPlan struct {
 }
 
 type WeekPlan struct {
-	Days []WeekDayPlan `json:"days"`
+	Days     []WeekDayPlan `json:"days"`
+	Warnings []string      `json:"warnings"`
 }
 
 var (
@@ -105,8 +110,18 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 	if len(dishes) == 0 {
 		return &WeekPlan{}, nil
 	}
+	for i := range dishes {
+		dishes[i] = ensureDishTraits(dishes[i])
+	}
 
 	prefs := GetWeekPlanPreferences()
+	rules, err := ListMenuRules()
+	var warnings []string
+	if err != nil {
+		warnings = append(warnings, "推荐规则读取失败，已使用基础推荐逻辑")
+	}
+	compiledRules, ruleWarnings := compileMenuRules(rules)
+	warnings = append(warnings, ruleWarnings...)
 
 	var lunchPool, dinnerPool []models.Dish
 	for _, d := range dishes {
@@ -139,6 +154,7 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 	var days []WeekDayPlan
 	usedAllIDs := make(map[uint]bool)
 	recentIDs := recentDishIDMap(RecommendationCooldownDays())
+	var weekPicked []models.Dish
 
 	for i := 0; i < 7; i++ {
 		date := monday.AddDate(0, 0, i)
@@ -154,26 +170,276 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		}
 
 		usedThisDay := make(map[uint]bool)
+		var dayPicked []models.Dish
 
-		dayPlan.Lunch = pickQuotaDishes(lunchPool, periodPrefs.Lunch, periodPrefs.Profile, usedAllIDs, usedThisDay, recentIDs, r)
-		dayPlan.Dinner = pickQuotaDishes(dinnerPool, periodPrefs.Dinner, periodPrefs.Profile, usedAllIDs, usedThisDay, recentIDs, r)
+		dayPlan.Lunch = pickQuotaDishes(lunchPool, periodPrefs.Lunch, periodPrefs.Profile, "lunch", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
+		dayPicked = append(dayPicked, dayPlan.Lunch...)
+		weekPicked = append(weekPicked, dayPlan.Lunch...)
+		dayPlan.Dinner = pickQuotaDishes(dinnerPool, periodPrefs.Dinner, periodPrefs.Profile, "dinner", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
+		dayPicked = append(dayPicked, dayPlan.Dinner...)
+		weekPicked = append(weekPicked, dayPlan.Dinner...)
 
 		days = append(days, dayPlan)
 	}
 
-	return &WeekPlan{Days: days}, nil
+	return &WeekPlan{Days: days, Warnings: uniqueWarnings(warnings)}, nil
 }
 
-func pickQuotaDishes(pool []models.Dish, quota MealQuota, profile string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, r *rand.Rand) []models.Dish {
+func pickQuotaDishes(pool []models.Dish, quota MealQuota, profile string, mealType string, dayName string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, warnings *[]string, r *rand.Rand) []models.Dish {
 	quota = normalizeMealQuota(quota)
 	if quota.total() <= 0 {
 		return []models.Dish{}
 	}
 	var picked []models.Dish
-	picked = append(picked, pickProteinDishes(pool, dishProteinMeat, quota.MeatCount, profile, globalUsed, dayUsed, recent, r)...)
-	picked = append(picked, pickProteinDishes(pool, dishProteinVeg, quota.VegCount, profile, globalUsed, dayUsed, recent, r)...)
-	picked = append(picked, pickSoupDishes(pool, quota.SoupCount, profile, globalUsed, dayUsed, recent, r)...)
+	for _, slot := range weekPlanSlots(quota) {
+		dish, ok, relaxed := pickBestDishForSlot(pool, slot, profile, quota, globalUsed, dayUsed, recent, picked, dayPicked, weekPicked, rules, r)
+		if !ok {
+			*warnings = append(*warnings, fmt.Sprintf("%s%s未补满：%s候选不足或被硬规则限制", dayName, mealLabelForWarning(mealType), slotLabelForWarning(slot)))
+			continue
+		}
+		if relaxed != "" {
+			*warnings = append(*warnings, fmt.Sprintf("%s%s为补足%s已放松%s", dayName, mealLabelForWarning(mealType), slotLabelForWarning(slot), relaxed))
+		}
+		picked = append(picked, dish)
+		globalUsed[dish.ID] = true
+		dayUsed[dish.ID] = true
+	}
 	return picked
+}
+
+type weekPlanSlot string
+
+const (
+	weekPlanSlotMeat weekPlanSlot = "meat"
+	weekPlanSlotVeg  weekPlanSlot = "veg"
+	weekPlanSlotSoup weekPlanSlot = "soup"
+)
+
+type weekPlanRelaxationStage struct {
+	label         string
+	avoidRecent   bool
+	strictProfile bool
+	avoidGlobal   bool
+	enforceSoft   bool
+	strictRole    bool
+}
+
+type weekPlanCandidateScore struct {
+	dish  models.Dish
+	score float64
+}
+
+func weekPlanSlots(quota MealQuota) []weekPlanSlot {
+	var slots []weekPlanSlot
+	for i := 0; i < quota.MeatCount; i++ {
+		slots = append(slots, weekPlanSlotMeat)
+	}
+	for i := 0; i < quota.VegCount; i++ {
+		slots = append(slots, weekPlanSlotVeg)
+	}
+	for i := 0; i < quota.SoupCount; i++ {
+		slots = append(slots, weekPlanSlotSoup)
+	}
+	return slots
+}
+
+func pickBestDishForSlot(pool []models.Dish, slot weekPlanSlot, profile string, quota MealQuota, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, r *rand.Rand) (models.Dish, bool, string) {
+	stages := []weekPlanRelaxationStage{
+		{label: "", avoidRecent: true, strictProfile: true, avoidGlobal: true, enforceSoft: true, strictRole: true},
+		{label: "最近避重", avoidRecent: false, strictProfile: true, avoidGlobal: true, enforceSoft: true, strictRole: true},
+		{label: "口味画像", avoidRecent: false, strictProfile: false, avoidGlobal: true, enforceSoft: true, strictRole: true},
+		{label: "全周唯一", avoidRecent: false, strictProfile: false, avoidGlobal: false, enforceSoft: true, strictRole: true},
+		{label: "软规则", avoidRecent: false, strictProfile: false, avoidGlobal: false, enforceSoft: false, strictRole: true},
+		{label: "菜品角色", avoidRecent: false, strictProfile: false, avoidGlobal: false, enforceSoft: false, strictRole: false},
+	}
+
+	for _, stage := range stages {
+		candidates := scoreWeekPlanCandidates(pool, slot, profile, quota, globalUsed, dayUsed, recent, mealPicked, dayPicked, weekPicked, rules, stage, r)
+		if len(candidates) == 0 {
+			continue
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].score != candidates[j].score {
+				return candidates[i].score > candidates[j].score
+			}
+			return candidates[i].dish.ID < candidates[j].dish.ID
+		})
+		return candidates[0].dish, true, stage.label
+	}
+	return models.Dish{}, false, ""
+}
+
+func scoreWeekPlanCandidates(pool []models.Dish, slot weekPlanSlot, profile string, quota MealQuota, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, stage weekPlanRelaxationStage, r *rand.Rand) []weekPlanCandidateScore {
+	var scores []weekPlanCandidateScore
+	for _, dish := range pool {
+		dish = ensureDishTraits(dish)
+		if dayUsed[dish.ID] {
+			continue
+		}
+		if stage.avoidGlobal && globalUsed[dish.ID] {
+			continue
+		}
+		if stage.avoidRecent && recent[dish.ID] {
+			continue
+		}
+		if !matchesWeekPlanSlot(dish, slot, stage.strictRole) {
+			continue
+		}
+		if stage.strictProfile && !matchesTomorrowProfile(dish, normalizePlanProfile(profile)) {
+			continue
+		}
+		allowed, _ := evaluateConstraintRules(dish, profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
+		if !allowed {
+			continue
+		}
+		score := baseWeekPlanDishScore(dish, slot, profile, stage.strictRole)
+		score += evaluateScoreRules(dish, profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
+		score += r.Float64()
+		scores = append(scores, weekPlanCandidateScore{dish: dish, score: score})
+	}
+	return scores
+}
+
+func matchesWeekPlanSlot(dish models.Dish, slot weekPlanSlot, strictRole bool) bool {
+	dish = ensureDishTraits(dish)
+	if strictRole {
+		switch slot {
+		case weekPlanSlotSoup:
+			return dish.DishRole == "soup" || isSoupDish(dish)
+		case weekPlanSlotVeg:
+			return dish.DishRole == "veg"
+		case weekPlanSlotMeat:
+			return dish.DishRole == "meat"
+		default:
+			return true
+		}
+	}
+	if slot == weekPlanSlotSoup {
+		return dish.DishRole == "soup" || isSoupDish(dish)
+	}
+	return dish.DishRole != "soup"
+}
+
+func baseWeekPlanDishScore(dish models.Dish, slot weekPlanSlot, profile string, strictRole bool) float64 {
+	score := float64(tomorrowDishScore(dish, normalizePlanProfile(profile)))
+	if strictRole {
+		score += 40
+	}
+	switch slot {
+	case weekPlanSlotMeat:
+		if dish.DishRole == "meat" {
+			score += 60
+		}
+	case weekPlanSlotVeg:
+		if dish.DishRole == "veg" {
+			score += 60
+		}
+	case weekPlanSlotSoup:
+		if dish.DishRole == "soup" {
+			score += 60
+		}
+	}
+	if dish.TraitSource == "manual" {
+		score += 4
+	}
+	return score
+}
+
+func evaluateConstraintRules(candidate models.Dish, profile string, quota MealQuota, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, enforceSoft bool) (bool, string) {
+	for _, item := range rules {
+		if item.rule.RuleKind != menuRuleKindConstraint {
+			continue
+		}
+		if item.rule.Severity == "soft" && item.rule.Relaxable && !enforceSoft {
+			continue
+		}
+		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, dayPicked, mealPicked)), profile, quota)
+		out, err := exprRunRule(item.program, env)
+		if err != nil {
+			continue
+		}
+		ok, _ := out.(bool)
+		if !ok {
+			if item.rule.Severity == "hard" && !item.rule.Relaxable {
+				return false, item.rule.Message
+			}
+			if enforceSoft {
+				return false, item.rule.Message
+			}
+		}
+	}
+	return true, ""
+}
+
+func evaluateScoreRules(candidate models.Dish, profile string, quota MealQuota, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, enforceSoft bool) float64 {
+	if !enforceSoft {
+		return 0
+	}
+	total := 0.0
+	for _, item := range rules {
+		if item.rule.RuleKind != menuRuleKindScore {
+			continue
+		}
+		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, dayPicked, mealPicked)), profile, quota)
+		out, err := exprRunRule(item.program, env)
+		if err != nil {
+			continue
+		}
+		if value, ok := numericRuleOutput(out); ok {
+			total += value
+		}
+	}
+	return total
+}
+
+func exprRunRule(program *vm.Program, env map[string]any) (any, error) {
+	return expr.Run(program, env)
+}
+
+func appendDishSlices(slices ...[]models.Dish) []models.Dish {
+	total := 0
+	for _, values := range slices {
+		total += len(values)
+	}
+	result := make([]models.Dish, 0, total)
+	for _, values := range slices {
+		result = append(result, values...)
+	}
+	return result
+}
+
+func uniqueWarnings(warnings []string) []string {
+	seen := make(map[string]bool, len(warnings))
+	result := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		warning = strings.TrimSpace(warning)
+		if warning == "" || seen[warning] {
+			continue
+		}
+		seen[warning] = true
+		result = append(result, warning)
+	}
+	return result
+}
+
+func mealLabelForWarning(mealType string) string {
+	if mealType == "lunch" {
+		return "午餐"
+	}
+	return "晚餐"
+}
+
+func slotLabelForWarning(slot weekPlanSlot) string {
+	switch slot {
+	case weekPlanSlotMeat:
+		return "荤菜"
+	case weekPlanSlotVeg:
+		return "素菜"
+	case weekPlanSlotSoup:
+		return "汤"
+	default:
+		return "菜品"
+	}
 }
 
 func pickSoupDishes(pool []models.Dish, count int, profile string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, r *rand.Rand) []models.Dish {

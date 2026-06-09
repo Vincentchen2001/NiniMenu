@@ -14,6 +14,38 @@ const mealTypes = [
 ]
 const difficulties = ["easy", "medium", "hard"]
 const diffLabels = { easy: "简单", medium: "中等", hard: "困难" }
+const dishRoleOptions = [
+  { key: "meat", label: "荤菜" },
+  { key: "veg", label: "素菜" },
+  { key: "soup", label: "汤" },
+  { key: "staple", label: "主食" },
+  { key: "side", label: "配菜" },
+]
+const proteinOptions = [
+  { key: "egg", label: "蛋类" },
+  { key: "pork", label: "猪肉" },
+  { key: "beef", label: "牛肉" },
+  { key: "lamb", label: "羊肉" },
+  { key: "poultry", label: "禽类" },
+  { key: "seafood", label: "水产" },
+  { key: "soy", label: "豆制品" },
+]
+const temperatureOptions = [
+  { key: "hot", label: "热食" },
+  { key: "cold", label: "冷/凉" },
+  { key: "mixed", label: "冷热均可" },
+]
+const cookingMethodOptions = [
+  { key: "stir_fry", label: "炒" },
+  { key: "cold_mix", label: "凉拌" },
+  { key: "simmer", label: "煮/炖" },
+  { key: "steam", label: "蒸" },
+  { key: "pan_fry", label: "煎" },
+  { key: "deep_fry", label: "炸" },
+  { key: "braise", label: "焖/卤" },
+  { key: "roast", label: "烤" },
+]
+const levelLabels = ["低", "中", "高"]
 
 interface Ingredient { name: string; amount: string }
 interface Step { text: string; time?: number }
@@ -83,6 +115,13 @@ export default function AdminDishEdit() {
   const [tags, setTags] = useState<string[]>([])
   const [tagInput, setTagInput] = useState("")
   const [sortOrder, setSortOrder] = useState(0)
+  const [dishRole, setDishRole] = useState("side")
+  const [proteinSources, setProteinSources] = useState<string[]>([])
+  const [servingTemperature, setServingTemperature] = useState("hot")
+  const [cookingMethods, setCookingMethods] = useState<string[]>([])
+  const [spiceLevel, setSpiceLevel] = useState(0)
+  const [richnessLevel, setRichnessLevel] = useState(0)
+  const [carbLevel, setCarbLevel] = useState(0)
   const [addingCategory, setAddingCategory] = useState(false)
   const [addingTaste, setAddingTaste] = useState(false)
   const [newCategory, setNewCategory] = useState("")
@@ -108,6 +147,13 @@ export default function AdminDishEdit() {
     setIngredientsText(asArray(dish.ingredients).map(fmtIngredient).join("\n"))
     setSeasoningsText(asArray(dish.seasonings).map(fmtIngredient).join("\n"))
     setStepsText(asArray(dish.steps).map(fmtStep).join("\n"))
+    setDishRole(dish.dish_role || "side")
+    setProteinSources(asArray<string>(dish.protein_sources).filter((x) => typeof x === "string"))
+    setServingTemperature(dish.serving_temperature || "hot")
+    setCookingMethods(asArray<string>(dish.cooking_methods).filter((x) => typeof x === "string"))
+    setSpiceLevel(dish.spice_level || 0)
+    setRichnessLevel(dish.richness_level || 0)
+    setCarbLevel(dish.carb_level || 0)
   }, [dish])
 
   function fmtIngredient(item: unknown): string {
@@ -160,6 +206,15 @@ export default function AdminDishEdit() {
         images: JSON.stringify(images),
         video_url: videoUrl,
         tags: JSON.stringify(tags),
+        dish_role: dishRole,
+        protein_sources: JSON.stringify(proteinSources),
+        serving_temperature: servingTemperature,
+        cooking_methods: JSON.stringify(cookingMethods),
+        spice_level: spiceLevel,
+        richness_level: richnessLevel,
+        carb_level: carbLevel,
+        trait_source: "manual",
+        trait_version: 1,
         sort_order: sortOrder,
       }
       return isNew ? dishesApi.create(data) : dishesApi.update(dishId, data)
@@ -227,6 +282,10 @@ export default function AdminDishEdit() {
 
   function toggleTaste(t: string) {
     setTasteList((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t])
+  }
+
+  function toggleListValue(value: string, setter: React.Dispatch<React.SetStateAction<string[]>>) {
+    setter((prev) => prev.includes(value) ? prev.filter((x) => x !== value) : [...prev, value])
   }
 
   async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -401,6 +460,63 @@ export default function AdminDishEdit() {
         <Field label="教程视频链接" hint="B站/抖音/YouTube 视频链接，点击可跳转">
           <input type="text" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder="粘贴视频链接" className={inputCls} />
         </Field>
+      </Section>
+
+      <Section title="菜品画像">
+        <Field label="菜单角色" hint="用于周菜单按荤、素、汤、主食分配槽位">
+          <div className="flex flex-wrap gap-2">
+            {dishRoleOptions.map((option) => (
+              <button key={option.key} onClick={() => setDishRole(option.key)} className={`px-3.5 py-1.5 rounded-full text-xs border-[1.5px] transition-all active:scale-95 ${dishRole === option.key ? "bg-primary text-white border-primary" : "border-border text-text2"}`}>{option.label}</button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="主蛋白来源" hint="用于避免同餐双蛋、同蛋白重复">
+          <div className="flex flex-wrap gap-2">
+            {proteinOptions.map((option) => (
+              <button key={option.key} onClick={() => toggleListValue(option.key, setProteinSources)} className={`px-3.5 py-1.5 rounded-full text-xs border-[1.5px] transition-all active:scale-95 ${proteinSources.includes(option.key) ? "bg-primary text-white border-primary" : "border-border text-text2"}`}>{option.label}</button>
+            ))}
+          </div>
+        </Field>
+
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="冷热形态">
+            <div className="flex flex-wrap gap-2">
+              {temperatureOptions.map((option) => (
+                <button key={option.key} onClick={() => setServingTemperature(option.key)} className={`px-3.5 py-1.5 rounded-full text-xs border-[1.5px] transition-all active:scale-95 ${servingTemperature === option.key ? "bg-primary text-white border-primary" : "border-border text-text2"}`}>{option.label}</button>
+              ))}
+            </div>
+          </Field>
+          <Field label="做法">
+            <div className="flex flex-wrap gap-2">
+              {cookingMethodOptions.map((option) => (
+                <button key={option.key} onClick={() => toggleListValue(option.key, setCookingMethods)} className={`px-3.5 py-1.5 rounded-full text-xs border-[1.5px] transition-all active:scale-95 ${cookingMethods.includes(option.key) ? "bg-primary text-white border-primary" : "border-border text-text2"}`}>{option.label}</button>
+              ))}
+            </div>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: "辣度", value: spiceLevel, set: setSpiceLevel },
+            { label: "厚重度", value: richnessLevel, set: setRichnessLevel },
+            { label: "主食感", value: carbLevel, set: setCarbLevel },
+          ].map((item) => (
+            <Field key={item.label} label={item.label}>
+              <div className="grid grid-cols-3 overflow-hidden rounded-full border border-border bg-bg">
+                {[0, 1, 2].map((level) => (
+                  <button
+                    key={level}
+                    onClick={() => item.set(level)}
+                    className={`py-1.5 text-[11px] font-bold transition-all ${item.value === level ? "bg-primary text-white" : "text-text3 hover:text-primary"}`}
+                  >
+                    {levelLabels[level]}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          ))}
+        </div>
       </Section>
 
       <Section title="食材与步骤">

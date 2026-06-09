@@ -77,6 +77,23 @@ type DishRecommendation struct {
 	CreatedAt   time.Time `json:"created_at" gorm:"index"`
 }
 
+type MenuRule struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	Code        string    `json:"code" gorm:"not null;uniqueIndex"`
+	Name        string    `json:"name" gorm:"not null"`
+	Description string    `json:"description"`
+	Enabled     bool      `json:"enabled" gorm:"default:true;index"`
+	Scope       string    `json:"scope" gorm:"default:'meal';index"`
+	RuleKind    string    `json:"rule_kind" gorm:"default:'constraint';index"`
+	Severity    string    `json:"severity" gorm:"default:'hard';index"`
+	Relaxable   bool      `json:"relaxable" gorm:"default:false;index"`
+	Expression  string    `json:"expression" gorm:"not null"`
+	Priority    int       `json:"priority" gorm:"default:0;index"`
+	Message     string    `json:"message"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 type DayRating struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	MealDate  string    `json:"meal_date" gorm:"not null;uniqueIndex"`

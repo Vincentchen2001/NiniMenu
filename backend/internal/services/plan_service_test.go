@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
@@ -19,7 +20,7 @@ func setupPlanServiceTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Dish{}, &models.Setting{}, &models.MealRecord{}, &models.DishRecommendation{}); err != nil {
+	if err := db.AutoMigrate(&models.Dish{}, &models.Setting{}, &models.MealRecord{}, &models.DishRecommendation{}, &models.MenuRule{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 
@@ -27,6 +28,44 @@ func setupPlanServiceTestDB(t *testing.T) {
 	t.Cleanup(func() {
 		database.DB = originalDB
 	})
+}
+
+func hasJSONValue(raw string, want string) bool {
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return false
+	}
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func countTraitValue(dishes []models.Dish, field string, value string) int {
+	count := 0
+	for _, dish := range dishes {
+		switch field {
+		case "protein_sources":
+			if hasJSONValue(dish.ProteinSources, value) {
+				count++
+			}
+		case "cooking_methods":
+			if hasJSONValue(dish.CookingMethods, value) {
+				count++
+			}
+		case "serving_temperature":
+			if dish.ServingTemperature == value {
+				count++
+			}
+		case "dish_role":
+			if dish.DishRole == value {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func saveWeekPlanPreferenceForTest(t *testing.T, prefs WeekPlanPreferences) {
@@ -249,6 +288,174 @@ func TestIsSoupDish(t *testing.T) {
 				t.Fatalf("isSoupDish() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInferDishTraitsForMenuRules(t *testing.T) {
+	tests := []struct {
+		name              string
+		dish              models.Dish
+		wantRole          string
+		wantProtein       string
+		wantTemperature   string
+		wantCookingMethod string
+		wantMinimumCarb   int
+	}{
+		{
+			name:              "egg dish",
+			dish:              models.Dish{Name: "番茄炒蛋", Category: "家常菜", Tags: `["素菜"]`, Ingredients: `[{"name":"鸡蛋","amount":"2个"},{"name":"番茄","amount":"2个"}]`, Steps: `[{"text":"热油炒蛋，再下番茄翻炒"}]`},
+			wantRole:          "meat",
+			wantProtein:       "egg",
+			wantTemperature:   "hot",
+			wantCookingMethod: "stir_fry",
+		},
+		{
+			name:              "cold carb dish",
+			dish:              models.Dish{Name: "凉拌米线", Category: "云南菜", Taste: "酸辣", Tags: `["午餐","凉菜"]`, Ingredients: `[{"name":"米线","amount":"350克"},{"name":"黄瓜","amount":"120克"}]`, Steps: `[{"text":"米线烫熟过凉，和配菜拌匀"}]`},
+			wantRole:          "staple",
+			wantTemperature:   "cold",
+			wantCookingMethod: "cold_mix",
+			wantMinimumCarb:   2,
+		},
+		{
+			name:              "egg soup",
+			dish:              models.Dish{Name: "紫菜蛋花汤", Category: "汤品", Tags: `["汤品"]`, Ingredients: `[{"name":"紫菜","amount":"适量"},{"name":"鸡蛋","amount":"1个"}]`, Steps: `[{"text":"汤煮开后淋入蛋液"}]`},
+			wantRole:          "soup",
+			wantProtein:       "egg",
+			wantTemperature:   "hot",
+			wantCookingMethod: "simmer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := InferDishTraits(tt.dish)
+			if got.DishRole != tt.wantRole {
+				t.Fatalf("DishRole = %q, want %q", got.DishRole, tt.wantRole)
+			}
+			if tt.wantProtein != "" && !hasJSONValue(got.ProteinSources, tt.wantProtein) {
+				t.Fatalf("ProteinSources = %s, want %q", got.ProteinSources, tt.wantProtein)
+			}
+			if got.ServingTemperature != tt.wantTemperature {
+				t.Fatalf("ServingTemperature = %q, want %q", got.ServingTemperature, tt.wantTemperature)
+			}
+			if tt.wantCookingMethod != "" && !hasJSONValue(got.CookingMethods, tt.wantCookingMethod) {
+				t.Fatalf("CookingMethods = %s, want %q", got.CookingMethods, tt.wantCookingMethod)
+			}
+			if got.CarbLevel < tt.wantMinimumCarb {
+				t.Fatalf("CarbLevel = %d, want >= %d", got.CarbLevel, tt.wantMinimumCarb)
+			}
+			if got.TraitSource != "auto" || got.TraitVersion == 0 {
+				t.Fatalf("trait metadata = %q/%d, want auto with non-zero version", got.TraitSource, got.TraitVersion)
+			}
+		})
+	}
+}
+
+func TestValidateMenuRuleExpression(t *testing.T) {
+	valid := models.MenuRule{
+		Code:       "avoid_double_egg",
+		RuleKind:   "constraint",
+		Expression: `!has(candidate.protein_sources, "egg") || countMeal("protein_sources", "egg") == 0`,
+	}
+	if err := ValidateMenuRuleExpression(valid); err != nil {
+		t.Fatalf("ValidateMenuRuleExpression(valid) error = %v", err)
+	}
+
+	badVariable := valid
+	badVariable.Expression = `unknown.value == 1`
+	if err := ValidateMenuRuleExpression(badVariable); err == nil {
+		t.Fatalf("ValidateMenuRuleExpression() should reject unknown variables")
+	}
+
+	badReturn := valid
+	badReturn.Expression = `42`
+	if err := ValidateMenuRuleExpression(badReturn); err == nil {
+		t.Fatalf("ValidateMenuRuleExpression() should reject non-bool constraint rules")
+	}
+
+	scoreRule := models.MenuRule{
+		Code:       "quick_bonus",
+		RuleKind:   "score",
+		Expression: `candidate.cook_time <= 20 ? 10 : 0`,
+	}
+	if err := ValidateMenuRuleExpression(scoreRule); err != nil {
+		t.Fatalf("ValidateMenuRuleExpression(score) error = %v", err)
+	}
+}
+
+func TestGenerateWeekPlanHonorsHardMenuRules(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{
+			Profile: "balanced",
+			Lunch:   MealQuota{MeatCount: 2, VegCount: 2, SoupCount: 0},
+			Dinner:  MealQuota{MeatCount: 2, VegCount: 2, SoupCount: 0},
+		},
+		Weekend: WeekPlanPeriodPreferences{
+			Profile: "balanced",
+			Lunch:   MealQuota{MeatCount: 2, VegCount: 2, SoupCount: 0},
+			Dinner:  MealQuota{MeatCount: 2, VegCount: 2, SoupCount: 0},
+		},
+	})
+
+	for i := 1; i <= 20; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("番茄炒蛋%d", i), `["家常菜"]`, `[{"name":"鸡蛋","amount":"2个"},{"name":"番茄","amount":"2个"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("青椒肉丝%d", i), `["家常菜"]`, `[{"name":"猪肉","amount":"120克"},{"name":"青椒","amount":"1个"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("凉拌黄瓜%d", i), `["凉菜","素菜"]`, `[{"name":"黄瓜","amount":"1根"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("清炒青菜%d", i), `["素菜"]`, `[{"name":"青菜","amount":"1把"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("凉拌米线%d", i), `["凉菜","午餐"]`, `[{"name":"米线","amount":"250克"}]`)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	for _, day := range plan.Days {
+		for mealName, dishes := range map[string][]models.Dish{"lunch": day.Lunch, "dinner": day.Dinner} {
+			if eggs := countTraitValue(dishes, "protein_sources", "egg"); eggs > 1 {
+				t.Fatalf("%s %s egg dishes = %d, want <= 1: %+v", day.DayName, mealName, eggs, dishes)
+			}
+			if cold := countTraitValue(dishes, "serving_temperature", "cold"); cold > 1 {
+				t.Fatalf("%s %s cold dishes = %d, want <= 1: %+v", day.DayName, mealName, cold, dishes)
+			}
+			if staples := countTraitValue(dishes, "dish_role", "staple"); staples > 1 {
+				t.Fatalf("%s %s staple dishes = %d, want <= 1: %+v", day.DayName, mealName, staples, dishes)
+			}
+		}
+	}
+}
+
+func TestGenerateWeekPlanReturnsWarningsInsteadOfBreakingHardRules(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{
+			Profile: "balanced",
+			Lunch:   MealQuota{MeatCount: 2},
+			Dinner:  MealQuota{MeatCount: 0},
+		},
+		Weekend: WeekPlanPeriodPreferences{
+			Profile: "balanced",
+			Lunch:   MealQuota{MeatCount: 2},
+			Dinner:  MealQuota{MeatCount: 0},
+		},
+	})
+	createDishForPlanTest(t, "番茄炒蛋", `["家常菜"]`, `[{"name":"鸡蛋","amount":"2个"},{"name":"番茄","amount":"2个"}]`)
+	createDishForPlanTest(t, "金钱蛋", `["家常菜"]`, `[{"name":"鸡蛋","amount":"5个"}]`)
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if len(plan.Warnings) == 0 {
+		t.Fatalf("GenerateWeekPlan() should return warnings when hard rules prevent filling quota")
+	}
+	for _, day := range plan.Days {
+		if eggs := countTraitValue(day.Lunch, "protein_sources", "egg"); eggs > 1 {
+			t.Fatalf("%s lunch egg dishes = %d, want <= 1", day.DayName, eggs)
+		}
 	}
 }
 

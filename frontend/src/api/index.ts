@@ -1,6 +1,6 @@
 import { api, getUploadErrorMessage } from "./client"
 import defaultClient from "./client"
-import type { Dish, DishInput, PaginatedData, PickResult, BlindBoxResult, MealRecord, StatsData, DashboardData, Achievement, WeekPlan, WeekPlanPreferences, ShoppingCategory, ShoppingCategoryOverride, Holiday, Quote, DayRating, PhotoWall, DishRecordsResponse, DishCategoryCounts, FavoriteOverview } from "@/types"
+import type { Dish, DishInput, PaginatedData, PickResult, BlindBoxResult, MealRecord, StatsData, DashboardData, Achievement, WeekPlan, WeekPlanPreferences, MenuRule, ShoppingCategory, ShoppingCategoryOverride, Holiday, Quote, DayRating, PhotoWall, DishRecordsResponse, DishCategoryCounts, FavoriteOverview } from "@/types"
 
 export const dishesApi = {
   list: (params?: Record<string, string>) =>
@@ -89,6 +89,9 @@ export const weekPlanApi = {
   save: (data: WeekPlan) => api<WeekPlan>("PUT", "/week-plan", data),
   preferences: () => api<WeekPlanPreferences>("GET", "/week-plan/preferences"),
   updatePreferences: (data: WeekPlanPreferences) => api<WeekPlanPreferences>("PUT", "/week-plan/preferences", data),
+  rules: () => api<MenuRule[]>("GET", "/week-plan/rules"),
+  updateRules: (rules: MenuRule[]) => api<MenuRule[]>("PUT", "/week-plan/rules", { rules }),
+  validateRule: (rule: MenuRule) => api<null>("POST", "/week-plan/rules/validate", rule),
   regenerate: () => api<WeekPlan>("POST", "/week-plan/regenerate"),
 }
 

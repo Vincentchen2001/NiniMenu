@@ -54,6 +54,46 @@ func UpdateWeekPlanPreferencesHandler(c *gin.Context) {
 	utils.Success(c, services.GetWeekPlanPreferences())
 }
 
+func GetWeekPlanRulesHandler(c *gin.Context) {
+	rules, err := services.ListMenuRules()
+	if err != nil {
+		utils.InternalError(c, "读取推荐规则失败")
+		return
+	}
+	utils.Success(c, rules)
+}
+
+type UpdateWeekPlanRulesRequest struct {
+	Rules []models.MenuRule `json:"rules" binding:"required"`
+}
+
+func UpdateWeekPlanRulesHandler(c *gin.Context) {
+	var req UpdateWeekPlanRulesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数无效")
+		return
+	}
+	rules, err := services.SaveMenuRules(req.Rules)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.Success(c, rules)
+}
+
+func ValidateWeekPlanRuleHandler(c *gin.Context) {
+	var rule models.MenuRule
+	if err := c.ShouldBindJSON(&rule); err != nil {
+		utils.BadRequest(c, "参数无效")
+		return
+	}
+	if err := services.ValidateMenuRuleExpression(rule); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.SuccessMsg(c, "规则表达式有效")
+}
+
 func GetShoppingList(c *gin.Context) {
 	today := time.Now().Format("2006-01-02")
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
