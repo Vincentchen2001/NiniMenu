@@ -88,12 +88,7 @@ func RegenerateWeekPlan() *WeekPlan {
 }
 
 func saveWeekPlanCache(plan *WeekPlan) {
-	data, _ := json.Marshal(plan)
-	database.DB.Model(&models.Setting{}).Where("`key` = ?", "week_plan_cache").Assign(models.Setting{Key: "week_plan_cache", Value: string(data)}).FirstOrCreate(&models.Setting{})
-	planMu.Lock()
-	cachedPlan = plan
-	cachedWeekKey = getCurrentWeekKey()
-	planMu.Unlock()
+	_ = SaveWeekPlan(plan)
 }
 
 func InvalidateWeekPlanCache() {
@@ -111,8 +106,7 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		return &WeekPlan{}, nil
 	}
 
-	lunchCount := getSettingInt("lunch_dishes_per_day", 1)
-	dinnerCount := getSettingInt("dinner_dishes_per_day", 1)
+	prefs := GetWeekPlanPreferences()
 
 	var lunchPool, dinnerPool []models.Dish
 	for _, d := range dishes {
@@ -144,9 +138,14 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 
 	var days []WeekDayPlan
 	usedAllIDs := make(map[uint]bool)
+	recentIDs := recentDishIDMap(RecommendationCooldownDays())
 
 	for i := 0; i < 7; i++ {
 		date := monday.AddDate(0, 0, i)
+		periodPrefs := prefs.Weekday
+		if i >= 5 {
+			periodPrefs = prefs.Weekend
+		}
 		dayPlan := WeekDayPlan{
 			Date:    date.Format("2006-01-02"),
 			DayName: dayNames[i],
@@ -156,13 +155,165 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 
 		usedThisDay := make(map[uint]bool)
 
-		dayPlan.Lunch = pickNDishes(lunchPool, lunchCount, usedAllIDs, usedThisDay, r)
-		dayPlan.Dinner = pickNDishes(dinnerPool, dinnerCount, usedAllIDs, usedThisDay, r)
+		dayPlan.Lunch = pickQuotaDishes(lunchPool, periodPrefs.Lunch, periodPrefs.Profile, usedAllIDs, usedThisDay, recentIDs, r)
+		dayPlan.Dinner = pickQuotaDishes(dinnerPool, periodPrefs.Dinner, periodPrefs.Profile, usedAllIDs, usedThisDay, recentIDs, r)
 
 		days = append(days, dayPlan)
 	}
 
 	return &WeekPlan{Days: days}, nil
+}
+
+func pickQuotaDishes(pool []models.Dish, quota MealQuota, profile string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, r *rand.Rand) []models.Dish {
+	quota = normalizeMealQuota(quota)
+	if quota.total() <= 0 {
+		return []models.Dish{}
+	}
+	var picked []models.Dish
+	picked = append(picked, pickProteinDishes(pool, dishProteinMeat, quota.MeatCount, profile, globalUsed, dayUsed, recent, r)...)
+	picked = append(picked, pickProteinDishes(pool, dishProteinVeg, quota.VegCount, profile, globalUsed, dayUsed, recent, r)...)
+	picked = append(picked, pickSoupDishes(pool, quota.SoupCount, profile, globalUsed, dayUsed, recent, r)...)
+	return picked
+}
+
+func pickSoupDishes(pool []models.Dish, count int, profile string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, r *rand.Rand) []models.Dish {
+	if count <= 0 {
+		return []models.Dish{}
+	}
+	stages := []struct {
+		strictProfile bool
+		avoidRecent   bool
+		avoidGlobal   bool
+	}{
+		{strictProfile: true, avoidRecent: true, avoidGlobal: true},
+		{strictProfile: false, avoidRecent: true, avoidGlobal: true},
+		{strictProfile: false, avoidRecent: false, avoidGlobal: true},
+		{strictProfile: false, avoidRecent: false, avoidGlobal: false},
+	}
+
+	var picked []models.Dish
+	for len(picked) < count {
+		var candidates []models.Dish
+		for _, stage := range stages {
+			candidates = weekPlanSoupCandidates(pool, profile, globalUsed, dayUsed, recent, stage.strictProfile, stage.avoidRecent, stage.avoidGlobal)
+			if len(candidates) > 0 {
+				break
+			}
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		sortWeekPlanCandidates(candidates, profile, r)
+		dish := candidates[0]
+		picked = append(picked, dish)
+		globalUsed[dish.ID] = true
+		dayUsed[dish.ID] = true
+	}
+	return picked
+}
+
+func pickProteinDishes(pool []models.Dish, targetKind dishProteinKind, count int, profile string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, r *rand.Rand) []models.Dish {
+	if count <= 0 {
+		return []models.Dish{}
+	}
+	stages := []struct {
+		strictKind    bool
+		strictProfile bool
+		avoidRecent   bool
+		avoidGlobal   bool
+	}{
+		{strictKind: true, strictProfile: true, avoidRecent: true, avoidGlobal: true},
+		{strictKind: true, strictProfile: false, avoidRecent: true, avoidGlobal: true},
+		{strictKind: true, strictProfile: false, avoidRecent: false, avoidGlobal: true},
+		{strictKind: true, strictProfile: false, avoidRecent: false, avoidGlobal: false},
+		{strictKind: false, strictProfile: true, avoidRecent: true, avoidGlobal: true},
+		{strictKind: false, strictProfile: false, avoidRecent: true, avoidGlobal: true},
+		{strictKind: false, strictProfile: false, avoidRecent: false, avoidGlobal: true},
+		{strictKind: false, strictProfile: false, avoidRecent: false, avoidGlobal: false},
+	}
+
+	var picked []models.Dish
+	for len(picked) < count {
+		var candidates []models.Dish
+		for _, stage := range stages {
+			candidates = weekPlanCandidates(pool, targetKind, profile, globalUsed, dayUsed, recent, stage.strictKind, stage.strictProfile, stage.avoidRecent, stage.avoidGlobal)
+			if len(candidates) > 0 {
+				break
+			}
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		sortWeekPlanCandidates(candidates, profile, r)
+		dish := candidates[0]
+		picked = append(picked, dish)
+		globalUsed[dish.ID] = true
+		dayUsed[dish.ID] = true
+	}
+	return picked
+}
+
+func weekPlanCandidates(pool []models.Dish, targetKind dishProteinKind, profile string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, strictKind bool, strictProfile bool, avoidRecent bool, avoidGlobal bool) []models.Dish {
+	var candidates []models.Dish
+	for _, dish := range pool {
+		if isSoupDish(dish) {
+			continue
+		}
+		if dayUsed[dish.ID] {
+			continue
+		}
+		if avoidGlobal && globalUsed[dish.ID] {
+			continue
+		}
+		if avoidRecent && recent[dish.ID] {
+			continue
+		}
+		if strictKind && classifyDishProteinKind(dish) != targetKind {
+			continue
+		}
+		if strictProfile && !matchesTomorrowProfile(dish, normalizePlanProfile(profile)) {
+			continue
+		}
+		candidates = append(candidates, dish)
+	}
+	return candidates
+}
+
+func weekPlanSoupCandidates(pool []models.Dish, profile string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, strictProfile bool, avoidRecent bool, avoidGlobal bool) []models.Dish {
+	var candidates []models.Dish
+	for _, dish := range pool {
+		if !isSoupDish(dish) {
+			continue
+		}
+		if dayUsed[dish.ID] {
+			continue
+		}
+		if avoidGlobal && globalUsed[dish.ID] {
+			continue
+		}
+		if avoidRecent && recent[dish.ID] {
+			continue
+		}
+		if strictProfile && !matchesTomorrowProfile(dish, normalizePlanProfile(profile)) {
+			continue
+		}
+		candidates = append(candidates, dish)
+	}
+	return candidates
+}
+
+func sortWeekPlanCandidates(dishes []models.Dish, profile string, r *rand.Rand) {
+	r.Shuffle(len(dishes), func(i, j int) {
+		dishes[i], dishes[j] = dishes[j], dishes[i]
+	})
+	profile = normalizePlanProfile(profile)
+	sort.SliceStable(dishes, func(i, j int) bool {
+		a, b := tomorrowDishScore(dishes[i], profile), tomorrowDishScore(dishes[j], profile)
+		if a != b {
+			return a > b
+		}
+		return dishes[i].ID < dishes[j].ID
+	})
 }
 
 func pickNDishes(pool []models.Dish, count int, globalUsed map[uint]bool, dayUsed map[uint]bool, r *rand.Rand) []models.Dish {

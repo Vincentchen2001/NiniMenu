@@ -136,6 +136,25 @@ export interface WeekPlan {
   days: WeekDayPlan[]
 }
 
+export type PlanProfile = "balanced" | "quick" | "light" | "spicy" | "favorite"
+
+export interface MealQuota {
+  meat_count: number
+  veg_count: number
+  soup_count: number
+}
+
+export interface WeekPlanPeriodPreferences {
+  profile: PlanProfile
+  lunch: MealQuota
+  dinner: MealQuota
+}
+
+export interface WeekPlanPreferences {
+  weekday: WeekPlanPeriodPreferences
+  weekend: WeekPlanPeriodPreferences
+}
+
 export interface ShoppingCategory {
   category: string
   items: ShoppingItem[]

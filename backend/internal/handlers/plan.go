@@ -24,6 +24,36 @@ func RegenerateWeekPlanHandler(c *gin.Context) {
 	utils.Success(c, plan)
 }
 
+func SaveWeekPlanHandler(c *gin.Context) {
+	var plan services.WeekPlan
+	if err := c.ShouldBindJSON(&plan); err != nil {
+		utils.BadRequest(c, "参数无效")
+		return
+	}
+	if err := services.SaveWeekPlan(&plan); err != nil {
+		utils.InternalError(c, "保存菜单失败")
+		return
+	}
+	utils.Success(c, &plan)
+}
+
+func GetWeekPlanPreferencesHandler(c *gin.Context) {
+	utils.Success(c, services.GetWeekPlanPreferences())
+}
+
+func UpdateWeekPlanPreferencesHandler(c *gin.Context) {
+	var prefs services.WeekPlanPreferences
+	if err := c.ShouldBindJSON(&prefs); err != nil {
+		utils.BadRequest(c, "参数无效")
+		return
+	}
+	if err := services.SaveWeekPlanPreferences(prefs); err != nil {
+		utils.InternalError(c, "保存设置失败")
+		return
+	}
+	utils.Success(c, services.GetWeekPlanPreferences())
+}
+
 func GetShoppingList(c *gin.Context) {
 	today := time.Now().Format("2006-01-02")
 	tomorrow := time.Now().AddDate(0, 0, 1).Format("2006-01-02")

@@ -2,7 +2,6 @@ package services
 
 import (
 	"math/rand"
-	"ninimenu/internal/config"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
 	"sort"
@@ -32,7 +31,7 @@ func PickDishes(mealType string, count int, excludeRecent bool) ([]models.Dish, 
 	}
 
 	if excludeRecent {
-		dishes = filterRecent(dishes, config.C.RepeatDays)
+		dishes = filterRecent(dishes, RecommendationCooldownDays())
 	}
 
 	if len(dishes) == 0 {
@@ -113,7 +112,7 @@ func PickTomorrowDishes(opts TomorrowPickOptions) ([]models.Dish, error) {
 		}
 	}
 
-	recent := recentDishIDMap(config.C.RepeatDays)
+	recent := recentDishIDMap(RecommendationCooldownDays())
 	pool := filterTomorrowPool(dishes, profile, excluded, recent, true)
 	if len(pool) == 0 {
 		pool = filterTomorrowPool(dishes, profile, excluded, recent, false)
@@ -249,12 +248,19 @@ func recentDishIDMap(days int) map[uint]bool {
 	database.DB.Model(&models.MealRecord{}).
 		Where("meal_date >= ?", since).
 		Pluck("dish_id", &recentIDs)
+	database.DB.Model(&models.DishRecommendation{}).
+		Where("planned_date >= ?", since).
+		Pluck("dish_id", &recentIDs)
 
 	result := make(map[uint]bool, len(recentIDs))
 	for _, id := range recentIDs {
 		result[id] = true
 	}
 	return result
+}
+
+func RecommendationCooldownDays() int {
+	return getSettingInt("repeat_days", 3)
 }
 
 func containsTaste(raw string, target string) bool {

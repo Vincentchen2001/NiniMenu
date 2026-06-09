@@ -5,6 +5,7 @@ import (
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -18,7 +19,7 @@ func setupPlanServiceTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Dish{}, &models.Setting{}); err != nil {
+	if err := db.AutoMigrate(&models.Dish{}, &models.Setting{}, &models.MealRecord{}, &models.DishRecommendation{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 
@@ -26,6 +27,229 @@ func setupPlanServiceTestDB(t *testing.T) {
 	t.Cleanup(func() {
 		database.DB = originalDB
 	})
+}
+
+func saveWeekPlanPreferenceForTest(t *testing.T, prefs WeekPlanPreferences) {
+	t.Helper()
+	if err := SaveWeekPlanPreferences(prefs); err != nil {
+		t.Fatalf("SaveWeekPlanPreferences() error = %v", err)
+	}
+}
+
+func createDishForPlanTest(t *testing.T, name string, tags string, ingredients string) models.Dish {
+	t.Helper()
+	dish := models.Dish{
+		Name:        name,
+		MealType:    "all",
+		Tags:        tags,
+		Ingredients: ingredients,
+		Enabled:     true,
+	}
+	if err := database.DB.Create(&dish).Error; err != nil {
+		t.Fatalf("create dish %s: %v", name, err)
+	}
+	return dish
+}
+
+func countDishKinds(dishes []models.Dish) (meat int, veg int, soup int) {
+	for _, dish := range dishes {
+		if isSoupDish(dish) {
+			soup++
+			continue
+		}
+		switch classifyDishProteinKind(dish) {
+		case dishProteinMeat:
+			meat++
+		case dishProteinVeg:
+			veg++
+		}
+	}
+	return meat, veg, soup
+}
+
+func TestGenerateWeekPlanUsesWeekdayWeekendMeatVegSoupPreferences(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{
+			Profile: "balanced",
+			Lunch:   MealQuota{MeatCount: 1, VegCount: 1, SoupCount: 1},
+			Dinner:  MealQuota{MeatCount: 1, VegCount: 0, SoupCount: 1},
+		},
+		Weekend: WeekPlanPeriodPreferences{
+			Profile: "favorite",
+			Lunch:   MealQuota{MeatCount: 0, VegCount: 0},
+			Dinner:  MealQuota{MeatCount: 0, VegCount: 2, SoupCount: 1},
+		},
+	})
+
+	for i := 1; i <= 20; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("青菜%d", i), `["素菜"]`, `[{"name":"青菜","amount":"1把"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("鸡肉%d", i), `["家常菜"]`, `[{"name":"鸡肉","amount":"100g"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("菌菇汤%d", i), `["汤品"]`, `[{"name":"香菇","amount":"50g"},{"name":"金针菇","amount":"50g"}]`)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if len(plan.Days) != 7 {
+		t.Fatalf("plan day count = %d, want 7", len(plan.Days))
+	}
+	for i, day := range plan.Days {
+		lunchMeat, lunchVeg, lunchSoup := countDishKinds(day.Lunch)
+		dinnerMeat, dinnerVeg, dinnerSoup := countDishKinds(day.Dinner)
+		if i < 5 {
+			if lunchMeat != 1 || lunchVeg != 1 || lunchSoup != 1 {
+				t.Fatalf("%s lunch meat/veg/soup = %d/%d/%d, want 1/1/1", day.DayName, lunchMeat, lunchVeg, lunchSoup)
+			}
+			if dinnerMeat != 1 || dinnerVeg != 0 || dinnerSoup != 1 {
+				t.Fatalf("%s dinner meat/veg/soup = %d/%d/%d, want 1/0/1", day.DayName, dinnerMeat, dinnerVeg, dinnerSoup)
+			}
+			continue
+		}
+		if len(day.Lunch) != 0 {
+			t.Fatalf("%s lunch count = %d, want skipped", day.DayName, len(day.Lunch))
+		}
+		if dinnerMeat != 0 || dinnerVeg != 2 || dinnerSoup != 1 {
+			t.Fatalf("%s dinner meat/veg/soup = %d/%d/%d, want 0/2/1", day.DayName, dinnerMeat, dinnerVeg, dinnerSoup)
+		}
+	}
+}
+
+func TestSaveWeekPlanRecordsAndReplacesRecommendations(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	first := createDishForPlanTest(t, "第一道菜", `["素菜"]`, `[{"name":"西兰花","amount":"1棵"}]`)
+	second := createDishForPlanTest(t, "第二道菜", `["家常菜"]`, `[{"name":"牛肉","amount":"100g"}]`)
+
+	plan := &WeekPlan{Days: []WeekDayPlan{{
+		Date:    "2099-01-05",
+		DayName: "周一",
+		Lunch:   []models.Dish{first},
+		Dinner:  []models.Dish{},
+	}}}
+	if err := SaveWeekPlan(plan); err != nil {
+		t.Fatalf("SaveWeekPlan(first) error = %v", err)
+	}
+
+	plan.Days[0].Lunch = []models.Dish{second}
+	if err := SaveWeekPlan(plan); err != nil {
+		t.Fatalf("SaveWeekPlan(second) error = %v", err)
+	}
+
+	var records []models.DishRecommendation
+	if err := database.DB.Order("dish_id ASC").Find(&records).Error; err != nil {
+		t.Fatalf("list recommendations: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("recommendation count = %d, want 1: %+v", len(records), records)
+	}
+	if records[0].DishID != second.ID {
+		t.Fatalf("recommendation dish_id = %d, want %d", records[0].DishID, second.ID)
+	}
+	if records[0].Source != recommendationSourceWeekPlan || records[0].MealType != "lunch" || records[0].PlannedDate != "2099-01-05" {
+		t.Fatalf("recommendation metadata = %+v", records[0])
+	}
+}
+
+func TestRecentDishIDMapUsesRecommendationHistoryAndSetting(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	if err := database.DB.Create(&models.Setting{Key: "repeat_days", Value: "7"}).Error; err != nil {
+		t.Fatalf("create repeat_days setting: %v", err)
+	}
+	dish := createDishForPlanTest(t, "最近推荐", `["素菜"]`, `[{"name":"豆腐","amount":"1块"}]`)
+	if err := database.DB.Create(&models.DishRecommendation{
+		DishID:      dish.ID,
+		Source:      recommendationSourceWeekPlan,
+		MealType:    "dinner",
+		PlannedDate: time.Now().Format("2006-01-02"),
+	}).Error; err != nil {
+		t.Fatalf("create recommendation: %v", err)
+	}
+
+	if got := RecommendationCooldownDays(); got != 7 {
+		t.Fatalf("RecommendationCooldownDays() = %d, want 7", got)
+	}
+	recent := recentDishIDMap(RecommendationCooldownDays())
+	if !recent[dish.ID] {
+		t.Fatalf("recentDishIDMap() should include dish recommendation id %d", dish.ID)
+	}
+}
+
+func TestClassifyDishProteinKind(t *testing.T) {
+	tests := []struct {
+		name string
+		dish models.Dish
+		want dishProteinKind
+	}{
+		{
+			name: "pure veg tag",
+			dish: models.Dish{Name: "蒜蓉青菜", Tags: `["素菜"]`, Ingredients: `[{"name":"青菜","amount":"1把"}]`},
+			want: dishProteinVeg,
+		},
+		{
+			name: "meat ingredient",
+			dish: models.Dish{Name: "青椒肉丝", Tags: `["家常菜"]`, Ingredients: `[{"name":"猪肉","amount":"100g"},{"name":"青椒","amount":"1个"}]`},
+			want: dishProteinMeat,
+		},
+		{
+			name: "veg tag with egg counts as meat",
+			dish: models.Dish{Name: "番茄炒蛋", Tags: `["素菜"]`, Ingredients: `[{"name":"鸡蛋","amount":"2个"},{"name":"番茄","amount":"2个"}]`},
+			want: dishProteinMeat,
+		},
+		{
+			name: "name keyword fallback",
+			dish: models.Dish{Name: "虾仁滑蛋", Tags: `[]`, Ingredients: `[]`},
+			want: dishProteinMeat,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyDishProteinKind(tt.dish); got != tt.want {
+				t.Fatalf("classifyDishProteinKind() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsSoupDish(t *testing.T) {
+	tests := []struct {
+		name string
+		dish models.Dish
+		want bool
+	}{
+		{
+			name: "soup category",
+			dish: models.Dish{Name: "番茄豆腐汤", Category: "汤品", Tags: `[]`, Ingredients: `[{"name":"番茄","amount":"1个"},{"name":"豆腐","amount":"1块"}]`},
+			want: true,
+		},
+		{
+			name: "soup tag",
+			dish: models.Dish{Name: "菌菇煲", Tags: `["汤品"]`, Ingredients: `[{"name":"香菇","amount":"50g"}]`},
+			want: true,
+		},
+		{
+			name: "name keyword",
+			dish: models.Dish{Name: "紫菜蛋花汤", Tags: `[]`, Ingredients: `[{"name":"紫菜","amount":"适量"},{"name":"鸡蛋","amount":"1个"}]`},
+			want: true,
+		},
+		{
+			name: "non soup egg dish",
+			dish: models.Dish{Name: "番茄炒蛋", Tags: `[]`, Ingredients: `[{"name":"番茄","amount":"2个"},{"name":"鸡蛋","amount":"2个"}]`},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSoupDish(tt.dish); got != tt.want {
+				t.Fatalf("isSoupDish() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestGenerateWeekPlanAllowsSkippingLunch(t *testing.T) {

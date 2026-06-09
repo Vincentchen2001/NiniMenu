@@ -1,11 +1,11 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom"
 import { useEffect, useRef, useState } from "react"
-import { CalendarDays, Heart, Home as HomeIcon, Images, Menu, UtensilsCrossed } from "lucide-react"
+import { CalendarCheck, CalendarDays, Heart, Home as HomeIcon, Menu, UtensilsCrossed } from "lucide-react"
 import { gsap, motionDuration, useGSAP } from "@/lib/gsap"
 import Home from "@/pages/Home"
 import DishList from "@/pages/DishList"
 import History from "@/pages/History"
-import PhotoWall from "@/pages/PhotoWall"
+import WeekPlan from "@/pages/WeekPlan"
 import Favorites from "@/pages/Favorites"
 import More from "@/pages/More"
 
@@ -13,7 +13,7 @@ const tabs = [
   { path: "/", Component: Home, icon: HomeIcon, label: "首页", exact: true },
   { path: "/dishes", Component: DishList, icon: UtensilsCrossed, label: "菜品" },
   { path: "/history", Component: History, icon: CalendarDays, label: "记录" },
-  { path: "/photo-wall", Component: PhotoWall, icon: Images, label: "照片墙" },
+  { path: "/week-plan", Component: WeekPlan, icon: CalendarCheck, label: "菜单" },
   { path: "/favorites", Component: Favorites, icon: Heart, label: "收藏" },
   { path: "/more", Component: More, icon: Menu, label: "更多" },
 ]

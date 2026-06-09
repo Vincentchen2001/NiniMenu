@@ -67,6 +67,16 @@ type Setting struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type DishRecommendation struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	DishID      uint      `json:"dish_id" gorm:"not null;index;index:idx_dish_recommendations_lookup,priority:3"`
+	DishName    string    `json:"dish_name"`
+	Source      string    `json:"source" gorm:"not null;index;index:idx_dish_recommendations_lookup,priority:1"`
+	MealType    string    `json:"meal_type" gorm:"not null;index"`
+	PlannedDate string    `json:"planned_date" gorm:"not null;index;index:idx_dish_recommendations_lookup,priority:2"`
+	CreatedAt   time.Time `json:"created_at" gorm:"index"`
+}
+
 type DayRating struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	MealDate  string    `json:"meal_date" gorm:"not null;uniqueIndex"`

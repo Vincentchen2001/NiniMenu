@@ -1,6 +1,6 @@
 import { api, getUploadErrorMessage } from "./client"
 import defaultClient from "./client"
-import type { Dish, DishInput, PaginatedData, PickResult, BlindBoxResult, MealRecord, StatsData, DashboardData, Achievement, WeekPlan, ShoppingCategory, ShoppingCategoryOverride, Holiday, Quote, DayRating, PhotoWall, DishRecordsResponse, DishCategoryCounts, FavoriteOverview } from "@/types"
+import type { Dish, DishInput, PaginatedData, PickResult, BlindBoxResult, MealRecord, StatsData, DashboardData, Achievement, WeekPlan, WeekPlanPreferences, ShoppingCategory, ShoppingCategoryOverride, Holiday, Quote, DayRating, PhotoWall, DishRecordsResponse, DishCategoryCounts, FavoriteOverview } from "@/types"
 
 export const dishesApi = {
   list: (params?: Record<string, string>) =>
@@ -86,6 +86,9 @@ export const achievementsApi = {
 
 export const weekPlanApi = {
   get: () => api<WeekPlan>("GET", "/week-plan"),
+  save: (data: WeekPlan) => api<WeekPlan>("PUT", "/week-plan", data),
+  preferences: () => api<WeekPlanPreferences>("GET", "/week-plan/preferences"),
+  updatePreferences: (data: WeekPlanPreferences) => api<WeekPlanPreferences>("PUT", "/week-plan/preferences", data),
   regenerate: () => api<WeekPlan>("POST", "/week-plan/regenerate"),
 }
 
