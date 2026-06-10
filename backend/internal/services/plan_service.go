@@ -163,6 +163,7 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		if i >= 5 {
 			periodPrefs = prefs.Weekend
 		}
+		dayCtx, lunchQuota, dinnerQuota := resolveWeekPlanDay(prefs, periodPrefs, i)
 		dayPlan := WeekDayPlan{
 			Date:    date.Format("2006-01-02"),
 			DayName: dayNames[i],
@@ -173,10 +174,10 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		usedThisDay := make(map[uint]bool)
 		var dayPicked []models.Dish
 
-		dayPlan.Lunch = pickQuotaDishes(lunchPool, periodPrefs.Lunch, periodPrefs.Profile, "lunch", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
+		dayPlan.Lunch = pickQuotaDishes(lunchPool, lunchQuota, dayCtx, "lunch", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
 		dayPicked = append(dayPicked, dayPlan.Lunch...)
 		weekPicked = append(weekPicked, dayPlan.Lunch...)
-		dayPlan.Dinner = pickQuotaDishes(dinnerPool, periodPrefs.Dinner, periodPrefs.Profile, "dinner", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
+		dayPlan.Dinner = pickQuotaDishes(dinnerPool, dinnerQuota, dayCtx, "dinner", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
 		dayPicked = append(dayPicked, dayPlan.Dinner...)
 		weekPicked = append(weekPicked, dayPlan.Dinner...)
 
@@ -186,14 +187,59 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 	return &WeekPlan{Days: days, Warnings: uniqueWarnings(warnings)}, nil
 }
 
-func pickQuotaDishes(pool []models.Dish, quota MealQuota, profile string, mealType string, dayName string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, warnings *[]string, r *rand.Rand) []models.Dish {
+// weekPlanDayContext carries the effective taste profile and cravings for
+// one generated day.
+type weekPlanDayContext struct {
+	profile  string
+	dayWant  []string
+	weekWant []string
+}
+
+// resolveWeekPlanDay applies the per-day override for weekday index i
+// (0=Monday) on top of the period defaults, and adds a temporary soup slot
+// on 靓汤 days whose quotas have no soup at all.
+func resolveWeekPlanDay(prefs WeekPlanPreferences, periodPrefs WeekPlanPeriodPreferences, i int) (weekPlanDayContext, MealQuota, MealQuota) {
+	dayCtx := weekPlanDayContext{profile: periodPrefs.Profile, weekWant: prefs.WeekWant}
+	if i >= 0 && i < len(weekPlanDayKeys) {
+		if override, ok := prefs.Days[weekPlanDayKeys[i]]; ok {
+			if override.Profile != "" {
+				dayCtx.profile = override.Profile
+			}
+			dayCtx.dayWant = override.Want
+		}
+	}
+	lunchQuota, dinnerQuota := periodPrefs.Lunch, periodPrefs.Dinner
+	if dayCtx.profile == "soup" && lunchQuota.SoupCount+dinnerQuota.SoupCount == 0 {
+		if dinnerQuota.total() > 0 {
+			dinnerQuota.SoupCount = 1
+		} else if lunchQuota.total() > 0 {
+			lunchQuota.SoupCount = 1
+		}
+	}
+	return dayCtx, lunchQuota, dinnerQuota
+}
+
+func wantBonus(dish models.Dish, want []string, points float64) float64 {
+	if len(want) == 0 {
+		return 0
+	}
+	proteins := parseJSONStrings(dish.ProteinSources)
+	for _, key := range want {
+		if containsString(proteins, key) {
+			return points
+		}
+	}
+	return 0
+}
+
+func pickQuotaDishes(pool []models.Dish, quota MealQuota, dayCtx weekPlanDayContext, mealType string, dayName string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, warnings *[]string, r *rand.Rand) []models.Dish {
 	quota = normalizeMealQuota(quota)
 	if quota.total() <= 0 {
 		return []models.Dish{}
 	}
 	var picked []models.Dish
 	for _, slot := range weekPlanSlots(quota) {
-		dish, ok, relaxed := pickBestDishForSlot(pool, slot, profile, quota, globalUsed, dayUsed, recent, picked, dayPicked, weekPicked, rules, r)
+		dish, ok, relaxed := pickBestDishForSlot(pool, slot, dayCtx, quota, globalUsed, dayUsed, recent, picked, dayPicked, weekPicked, rules, r)
 		if !ok {
 			*warnings = append(*warnings, fmt.Sprintf("%s%s未补满：%s候选不足或被硬规则限制", dayName, mealLabelForWarning(mealType), slotLabelForWarning(slot)))
 			continue
@@ -244,7 +290,7 @@ func weekPlanSlots(quota MealQuota) []weekPlanSlot {
 	return slots
 }
 
-func pickBestDishForSlot(pool []models.Dish, slot weekPlanSlot, profile string, quota MealQuota, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, r *rand.Rand) (models.Dish, bool, string) {
+func pickBestDishForSlot(pool []models.Dish, slot weekPlanSlot, dayCtx weekPlanDayContext, quota MealQuota, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, r *rand.Rand) (models.Dish, bool, string) {
 	stages := []weekPlanRelaxationStage{
 		{label: "", avoidRecent: true, strictProfile: true, avoidGlobal: true, enforceSoft: true, strictRole: true},
 		{label: "最近避重", avoidRecent: false, strictProfile: true, avoidGlobal: true, enforceSoft: true, strictRole: true},
@@ -255,7 +301,7 @@ func pickBestDishForSlot(pool []models.Dish, slot weekPlanSlot, profile string, 
 	}
 
 	for _, stage := range stages {
-		candidates := scoreWeekPlanCandidates(pool, slot, profile, quota, globalUsed, dayUsed, recent, mealPicked, dayPicked, weekPicked, rules, stage, r)
+		candidates := scoreWeekPlanCandidates(pool, slot, dayCtx, quota, globalUsed, dayUsed, recent, mealPicked, dayPicked, weekPicked, rules, stage, r)
 		if len(candidates) == 0 {
 			continue
 		}
@@ -270,7 +316,7 @@ func pickBestDishForSlot(pool []models.Dish, slot weekPlanSlot, profile string, 
 	return models.Dish{}, false, ""
 }
 
-func scoreWeekPlanCandidates(pool []models.Dish, slot weekPlanSlot, profile string, quota MealQuota, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, stage weekPlanRelaxationStage, r *rand.Rand) []weekPlanCandidateScore {
+func scoreWeekPlanCandidates(pool []models.Dish, slot weekPlanSlot, dayCtx weekPlanDayContext, quota MealQuota, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, stage weekPlanRelaxationStage, r *rand.Rand) []weekPlanCandidateScore {
 	var scores []weekPlanCandidateScore
 	for _, dish := range pool {
 		dish = ensureDishTraits(dish)
@@ -286,15 +332,15 @@ func scoreWeekPlanCandidates(pool []models.Dish, slot weekPlanSlot, profile stri
 		if !matchesWeekPlanSlot(dish, slot, stage.strictRole) {
 			continue
 		}
-		if stage.strictProfile && !matchesTomorrowProfile(dish, normalizePlanProfile(profile)) {
+		if stage.strictProfile && !matchesTomorrowProfile(dish, normalizePlanProfile(dayCtx.profile)) {
 			continue
 		}
-		allowed, _ := evaluateConstraintRules(dish, profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
+		allowed, _ := evaluateConstraintRules(dish, dayCtx.profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
 		if !allowed {
 			continue
 		}
-		score := baseWeekPlanDishScore(dish, slot, profile, stage.strictRole)
-		score += evaluateScoreRules(dish, profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
+		score := baseWeekPlanDishScore(dish, slot, dayCtx, stage.strictRole)
+		score += evaluateScoreRules(dish, dayCtx.profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
 		score += r.Float64()
 		scores = append(scores, weekPlanCandidateScore{dish: dish, score: score})
 	}
@@ -321,8 +367,10 @@ func matchesWeekPlanSlot(dish models.Dish, slot weekPlanSlot, strictRole bool) b
 	return dish.DishRole != "soup"
 }
 
-func baseWeekPlanDishScore(dish models.Dish, slot weekPlanSlot, profile string, strictRole bool) float64 {
-	score := float64(tomorrowDishScore(dish, normalizePlanProfile(profile)))
+func baseWeekPlanDishScore(dish models.Dish, slot weekPlanSlot, dayCtx weekPlanDayContext, strictRole bool) float64 {
+	score := float64(tomorrowDishScore(dish, normalizePlanProfile(dayCtx.profile)))
+	score += wantBonus(dish, dayCtx.dayWant, 25)
+	score += wantBonus(dish, dayCtx.weekWant, 12)
 	if strictRole {
 		score += 40
 	}

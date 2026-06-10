@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
+	"strings"
 	"testing"
 	"time"
 
@@ -633,6 +634,139 @@ func TestGenerateWeekPlanAllowsSkippingLunch(t *testing.T) {
 		}
 		if len(day.Dinner) != 1 {
 			t.Fatalf("%s dinner count = %d, want 1", day.DayName, len(day.Dinner))
+		}
+	}
+}
+
+func TestGenerateWeekPlanAppliesDayProfileOverride(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Days:    map[string]DayOverride{"wed": {Profile: "spicy"}},
+	})
+	for i := 1; i <= 20; i++ {
+		mild := models.Dish{
+			Name:        fmt.Sprintf("白切鸡%d", i),
+			MealType:    "all",
+			Tags:        `["家常菜"]`,
+			Ingredients: `[{"name":"鸡肉","amount":"200g"}]`,
+			Favorite:    true,
+			Enabled:     true,
+		}
+		if err := database.DB.Create(&mild).Error; err != nil {
+			t.Fatalf("create mild dish: %v", err)
+		}
+		spicy := models.Dish{
+			Name:        fmt.Sprintf("麻辣牛肉%d", i),
+			MealType:    "all",
+			Taste:       "麻辣",
+			Tags:        `["家常菜"]`,
+			Ingredients: `[{"name":"牛肉","amount":"200g"}]`,
+			Enabled:     true,
+		}
+		if err := database.DB.Create(&spicy).Error; err != nil {
+			t.Fatalf("create spicy dish: %v", err)
+		}
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if len(plan.Days) != 7 {
+		t.Fatalf("day count = %d", len(plan.Days))
+	}
+	monday := plan.Days[0].Lunch
+	wednesday := plan.Days[2].Lunch
+	if len(monday) != 1 || len(wednesday) != 1 {
+		t.Fatalf("lunch counts = %d/%d, want 1/1", len(monday), len(wednesday))
+	}
+	if !strings.Contains(wednesday[0].Name, "麻辣") {
+		t.Fatalf("wednesday should pick spicy dish, got %s", wednesday[0].Name)
+	}
+	if strings.Contains(monday[0].Name, "麻辣") {
+		t.Fatalf("monday should keep favorite mild dish, got %s", monday[0].Name)
+	}
+}
+
+func TestGenerateWeekPlanAppliesWantBonus(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Days:    map[string]DayOverride{"mon": {Want: []string{"poultry"}}},
+	})
+	for i := 1; i <= 20; i++ {
+		pork := models.Dish{
+			Name:        fmt.Sprintf("红烧猪蹄%d", i),
+			MealType:    "all",
+			Tags:        `["家常菜"]`,
+			Ingredients: `[{"name":"猪蹄","amount":"300g"}]`,
+			Favorite:    true,
+			Enabled:     true,
+		}
+		if err := database.DB.Create(&pork).Error; err != nil {
+			t.Fatalf("create pork dish: %v", err)
+		}
+		chicken := models.Dish{
+			Name:        fmt.Sprintf("香煎鸡腿%d", i),
+			MealType:    "all",
+			Tags:        `["家常菜"]`,
+			Ingredients: `[{"name":"鸡腿","amount":"2个"}]`,
+			Enabled:     true,
+		}
+		if err := database.DB.Create(&chicken).Error; err != nil {
+			t.Fatalf("create chicken dish: %v", err)
+		}
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	monday := plan.Days[0].Lunch
+	tuesday := plan.Days[1].Lunch
+	if len(monday) != 1 || len(tuesday) != 1 {
+		t.Fatalf("lunch counts = %d/%d, want 1/1", len(monday), len(tuesday))
+	}
+	if !strings.Contains(monday[0].Name, "鸡腿") {
+		t.Fatalf("monday should pick craved poultry dish, got %s", monday[0].Name)
+	}
+	if !strings.Contains(tuesday[0].Name, "猪蹄") {
+		t.Fatalf("tuesday should pick favorite pork dish, got %s", tuesday[0].Name)
+	}
+}
+
+func TestGenerateWeekPlanSoupDayAddsTempSoupSlot(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Dinner: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Dinner: MealQuota{MeatCount: 1}},
+		Days:    map[string]DayOverride{"sat": {Profile: "soup"}},
+	})
+	for i := 1; i <= 10; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("青椒肉丝%d", i), `["家常菜"]`, `[{"name":"猪肉","amount":"100g"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("菌菇汤%d", i), `["汤品"]`, `[{"name":"香菇","amount":"50g"}]`)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	for i, day := range plan.Days {
+		_, _, soup := countDishKinds(day.Dinner)
+		if i == 5 {
+			if soup != 1 {
+				t.Fatalf("saturday dinner soup = %d, want temp slot 1: %+v", soup, day.Dinner)
+			}
+			continue
+		}
+		if soup != 0 {
+			t.Fatalf("%s dinner soup = %d, want 0", day.DayName, soup)
 		}
 	}
 }
