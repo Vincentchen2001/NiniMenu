@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom"
 import type { DayOverride, PlanProfile } from "@/types"
 import { PROFILE_EMOJI, PROFILE_LABELS, PROTEIN_OPTIONS } from "@/lib/weekPlanCombos"
 import { RefreshCw, X } from "lucide-react"
@@ -33,7 +34,9 @@ export default function DayThemeSheet({
     onChange({ ...value, want: next })
   }
 
-  return (
+  // Portaled to body: the tab-strip layout has a transform, which would
+  // otherwise become the containing block for this fixed overlay.
+  return createPortal(
     <div className="fixed inset-0 z-[220] flex items-end justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/42" />
       <div
@@ -118,6 +121,7 @@ export default function DayThemeSheet({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

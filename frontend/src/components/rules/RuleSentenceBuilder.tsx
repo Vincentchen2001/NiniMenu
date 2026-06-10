@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import { createPortal } from "react-dom"
 import { weekPlanApi } from "@/api"
 import type { MenuRule } from "@/types"
 import {
@@ -106,7 +107,9 @@ export default function RuleSentenceBuilder({
     }
   }
 
-  return (
+  // Portaled to body so transformed layout ancestors cannot hijack the
+  // fixed overlay's containing block.
+  return createPortal(
     <div className="fixed inset-0 z-[220] flex items-end justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/42" />
       <div
@@ -204,6 +207,7 @@ export default function RuleSentenceBuilder({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

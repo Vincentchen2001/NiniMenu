@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { dishesApi, weekPlanApi } from "@/api"
@@ -521,7 +522,9 @@ function DishPickerModal({
     })
   }, [candidates, category, search])
 
-  return (
+  // Portaled to body: the tab-strip layout's transform would otherwise
+  // become this fixed overlay's containing block.
+  return createPortal(
     <div className="fixed inset-0 z-[220] flex items-end justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/42" />
       <div
@@ -618,7 +621,8 @@ function DishPickerModal({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

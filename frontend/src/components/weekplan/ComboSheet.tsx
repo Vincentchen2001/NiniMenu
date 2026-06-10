@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react"
+import { createPortal } from "react-dom"
 import type { DayOverride, PlanProfile } from "@/types"
 import {
   DAY_KEYS,
@@ -76,7 +77,9 @@ export default function ComboSheet({
     }))
   }, [weekdayKey, weekendKey])
 
-  return (
+  // Portaled to body so the transformed tab-strip layout cannot hijack
+  // this fixed overlay's containing block.
+  return createPortal(
     <div className="fixed inset-0 z-[220] flex items-end justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/42" />
       <div
@@ -126,6 +129,7 @@ export default function ComboSheet({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
