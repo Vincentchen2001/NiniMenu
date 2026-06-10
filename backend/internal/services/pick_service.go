@@ -174,6 +174,8 @@ func matchesTomorrowProfile(d models.Dish, profile string) bool {
 		return containsTaste(d.Taste, "辣") || strings.Contains(d.Category, "川菜") || strings.Contains(d.Category, "湘菜") || strings.Contains(d.Category, "贵州菜") || strings.Contains(d.Name, "辣")
 	case "favorite":
 		return d.Favorite
+	case "soup":
+		return isSoupDish(d) || d.DishRole == "soup"
 	default:
 		return true
 	}
@@ -230,6 +232,13 @@ func tomorrowDishScore(d models.Dish, profile string) int {
 	case "favorite":
 		if d.Favorite {
 			score += 30
+		}
+	case "soup":
+		if isSoupDish(d) || d.DishRole == "soup" {
+			score += 18
+		}
+		if containsString(parseJSONStrings(d.CookingMethods), "simmer") {
+			score += 8
 		}
 	default:
 		if d.Difficulty == "easy" {

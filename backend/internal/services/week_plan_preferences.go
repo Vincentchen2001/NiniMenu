@@ -176,7 +176,7 @@ func normalizeWeekPlanPeriodPreferences(prefs WeekPlanPeriodPreferences) WeekPla
 
 func normalizePlanProfile(profile string) string {
 	switch strings.TrimSpace(profile) {
-	case "quick", "light", "spicy", "favorite":
+	case "quick", "light", "spicy", "favorite", "soup":
 		return strings.TrimSpace(profile)
 	default:
 		return "balanced"
