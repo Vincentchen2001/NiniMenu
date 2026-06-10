@@ -525,14 +525,14 @@ function DishPickerModal({
   // Portaled to body: the tab-strip layout's transform would otherwise
   // become this fixed overlay's containing block.
   return createPortal(
-    <div className="fixed inset-0 z-[220] flex items-end justify-center" onClick={onClose}>
+    <div className="fixed inset-0 z-[220] flex items-end justify-center sm:items-center sm:p-6" onClick={onClose}>
       <div className="absolute inset-0 bg-black/42" />
       <div
         onClick={(event) => event.stopPropagation()}
-        className="relative flex max-h-[86vh] w-full max-w-[640px] flex-col rounded-t-[28px] bg-card shadow-[0_-8px_30px_rgba(0,0,0,.16)] animate-fadeUp"
+        className="relative flex max-h-[86vh] w-full max-w-[640px] flex-col rounded-t-[28px] bg-card shadow-[0_-8px_30px_rgba(0,0,0,.16)] animate-fadeUp sm:max-h-[80vh] sm:max-w-[560px] sm:rounded-[28px] sm:shadow-[0_24px_60px_rgba(0,0,0,.22)]"
       >
         <div className="shrink-0 px-5 pt-3">
-          <div className="mx-auto mb-4 h-1 w-11 rounded-full bg-border2" />
+          <div className="mx-auto mb-4 h-1 w-11 rounded-full bg-border2 sm:hidden" />
           <div className="mb-4 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="truncate text-lg font-extrabold">添加{meta.label}</div>
