@@ -104,12 +104,28 @@ func InvalidateWeekPlanCache() {
 	planMu.Unlock()
 }
 
-func GenerateWeekPlan() (*WeekPlan, error) {
+var weekPlanDayNames = []string{"周一", "周二", "周三", "周四", "周五", "周六", "周日"}
+
+// weekPlanGenContext bundles the dish pools, preferences and compiled rules
+// shared by full-week generation and single-day regeneration.
+type weekPlanGenContext struct {
+	lunchPool  []models.Dish
+	dinnerPool []models.Dish
+	prefs      WeekPlanPreferences
+	rules      []compiledMenuRule
+	recent     map[uint]bool
+	warnings   []string
+	r          *rand.Rand
+}
+
+// buildWeekPlanGenContext returns nil when no enabled dish survives the
+// blocked-ingredient filter.
+func buildWeekPlanGenContext() *weekPlanGenContext {
 	var dishes []models.Dish
 	database.DB.Where("enabled = ?", true).Find(&dishes)
 	dishes = FilterBlockedDishes(dishes)
 	if len(dishes) == 0 {
-		return &WeekPlan{}, nil
+		return nil
 	}
 	for i := range dishes {
 		dishes[i] = ensureDishTraits(dishes[i])
@@ -142,7 +158,53 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		dinnerPool = dishes
 	}
 
-	dayNames := []string{"周一", "周二", "周三", "周四", "周五", "周六", "周日"}
+	return &weekPlanGenContext{
+		lunchPool:  lunchPool,
+		dinnerPool: dinnerPool,
+		prefs:      prefs,
+		rules:      compiledRules,
+		recent:     recentDishIDMap(RecommendationCooldownDays()),
+		warnings:   warnings,
+		r:          rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
+// generateDay fills one weekday (0=Monday). globalUsed and weekPicked carry
+// cross-day dedup state and are updated with the picked dishes.
+func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalUsed map[uint]bool, weekPicked *[]models.Dish) WeekDayPlan {
+	periodPrefs := ctx.prefs.Weekday
+	if dayIndex >= 5 {
+		periodPrefs = ctx.prefs.Weekend
+	}
+	dayCtx, lunchQuota, dinnerQuota := resolveWeekPlanDay(ctx.prefs, periodPrefs, dayIndex)
+	dayPlan := WeekDayPlan{
+		Date:   date.Format("2006-01-02"),
+		Lunch:  []models.Dish{},
+		Dinner: []models.Dish{},
+	}
+	if dayIndex >= 0 && dayIndex < len(weekPlanDayNames) {
+		dayPlan.DayName = weekPlanDayNames[dayIndex]
+	}
+
+	usedThisDay := make(map[uint]bool)
+	var dayPicked []models.Dish
+
+	dayPlan.Lunch = pickQuotaDishes(ctx.lunchPool, lunchQuota, dayCtx, "lunch", dayPlan.DayName, globalUsed, usedThisDay, ctx.recent, dayPicked, *weekPicked, ctx.rules, &ctx.warnings, ctx.r)
+	dayPicked = append(dayPicked, dayPlan.Lunch...)
+	*weekPicked = append(*weekPicked, dayPlan.Lunch...)
+	dayPlan.Dinner = pickQuotaDishes(ctx.dinnerPool, dinnerQuota, dayCtx, "dinner", dayPlan.DayName, globalUsed, usedThisDay, ctx.recent, dayPicked, *weekPicked, ctx.rules, &ctx.warnings, ctx.r)
+	dayPicked = append(dayPicked, dayPlan.Dinner...)
+	*weekPicked = append(*weekPicked, dayPlan.Dinner...)
+
+	return dayPlan
+}
+
+func GenerateWeekPlan() (*WeekPlan, error) {
+	ctx := buildWeekPlanGenContext()
+	if ctx == nil {
+		return &WeekPlan{}, nil
+	}
+
 	now := time.Now()
 	weekday := int(now.Weekday())
 	if weekday == 0 {
@@ -150,41 +212,69 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 	}
 	monday := now.AddDate(0, 0, 1-weekday)
 
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	var days []WeekDayPlan
-	usedAllIDs := make(map[uint]bool)
-	recentIDs := recentDishIDMap(RecommendationCooldownDays())
+	globalUsed := make(map[uint]bool)
 	var weekPicked []models.Dish
-
 	for i := 0; i < 7; i++ {
-		date := monday.AddDate(0, 0, i)
-		periodPrefs := prefs.Weekday
-		if i >= 5 {
-			periodPrefs = prefs.Weekend
-		}
-		dayCtx, lunchQuota, dinnerQuota := resolveWeekPlanDay(prefs, periodPrefs, i)
-		dayPlan := WeekDayPlan{
-			Date:    date.Format("2006-01-02"),
-			DayName: dayNames[i],
-			Lunch:   []models.Dish{},
-			Dinner:  []models.Dish{},
-		}
-
-		usedThisDay := make(map[uint]bool)
-		var dayPicked []models.Dish
-
-		dayPlan.Lunch = pickQuotaDishes(lunchPool, lunchQuota, dayCtx, "lunch", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
-		dayPicked = append(dayPicked, dayPlan.Lunch...)
-		weekPicked = append(weekPicked, dayPlan.Lunch...)
-		dayPlan.Dinner = pickQuotaDishes(dinnerPool, dinnerQuota, dayCtx, "dinner", dayPlan.DayName, usedAllIDs, usedThisDay, recentIDs, dayPicked, weekPicked, compiledRules, &warnings, r)
-		dayPicked = append(dayPicked, dayPlan.Dinner...)
-		weekPicked = append(weekPicked, dayPlan.Dinner...)
-
-		days = append(days, dayPlan)
+		days = append(days, ctx.generateDay(i, monday.AddDate(0, 0, i), globalUsed, &weekPicked))
 	}
 
-	return &WeekPlan{Days: days, Warnings: uniqueWarnings(warnings)}, nil
+	return &WeekPlan{Days: days, Warnings: uniqueWarnings(ctx.warnings)}, nil
+}
+
+// RegenerateWeekPlanDay replaces a single day of the current week plan,
+// keeping every other day untouched and avoiding their dishes.
+func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
+	date = strings.TrimSpace(date)
+	current := GetCachedWeekPlan()
+	if current == nil || len(current.Days) == 0 {
+		return nil, fmt.Errorf("日期不在本周菜单内")
+	}
+	dayIndex := -1
+	for i, day := range current.Days {
+		if day.Date == date {
+			dayIndex = i
+			break
+		}
+	}
+	if dayIndex < 0 {
+		return nil, fmt.Errorf("日期不在本周菜单内")
+	}
+	parsedDate, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return nil, fmt.Errorf("日期不在本周菜单内")
+	}
+
+	ctx := buildWeekPlanGenContext()
+	if ctx == nil {
+		return nil, fmt.Errorf("没有可用的菜品，请先在菜品库中添加")
+	}
+
+	// Work on a fresh Days slice so the cached plan pointer is never mutated.
+	newPlan := &WeekPlan{
+		Days:     append([]WeekDayPlan(nil), current.Days...),
+		Warnings: current.Warnings,
+	}
+
+	globalUsed := make(map[uint]bool)
+	var weekPicked []models.Dish
+	for i, day := range newPlan.Days {
+		if i == dayIndex {
+			continue
+		}
+		for _, dish := range appendDishSlices(day.Lunch, day.Dinner) {
+			globalUsed[dish.ID] = true
+			weekPicked = append(weekPicked, dish)
+		}
+	}
+
+	newPlan.Days[dayIndex] = ctx.generateDay(dayIndex, parsedDate, globalUsed, &weekPicked)
+	newPlan.Warnings = uniqueWarnings(append(append([]string{}, current.Warnings...), ctx.warnings...))
+
+	if err := SaveWeekPlan(newPlan); err != nil {
+		return nil, err
+	}
+	return newPlan, nil
 }
 
 // weekPlanDayContext carries the effective taste profile and cravings for

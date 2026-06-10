@@ -932,3 +932,111 @@ func TestClassifyShoppingItem(t *testing.T) {
 		})
 	}
 }
+
+func weekDayDishIDs(day WeekDayPlan) []uint {
+	var ids []uint
+	for _, dish := range day.Lunch {
+		ids = append(ids, dish.ID)
+	}
+	for _, dish := range day.Dinner {
+		ids = append(ids, dish.ID)
+	}
+	return ids
+}
+
+func equalUintSlices(a, b []uint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestRegenerateWeekPlanDayOnlyChangesTargetDay(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	t.Cleanup(InvalidateWeekPlanCache)
+
+	quota := WeekPlanPeriodPreferences{
+		Profile: "balanced",
+		Lunch:   MealQuota{MeatCount: 1, VegCount: 1},
+		Dinner:  MealQuota{MeatCount: 1},
+	}
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{Weekday: quota, Weekend: quota})
+
+	for i := 1; i <= 30; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("红烧肉%d", i), `["家常菜"]`, `[{"name":"五花肉","amount":"200g"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("青菜%d", i), `["素菜"]`, `[{"name":"青菜","amount":"1把"}]`)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if err := SaveWeekPlan(plan); err != nil {
+		t.Fatalf("SaveWeekPlan() error = %v", err)
+	}
+
+	before := make([][]uint, len(plan.Days))
+	for i, day := range plan.Days {
+		before[i] = weekDayDishIDs(day)
+	}
+	target := plan.Days[2].Date
+
+	updated, err := RegenerateWeekPlanDay(target)
+	if err != nil {
+		t.Fatalf("RegenerateWeekPlanDay(%q) error = %v", target, err)
+	}
+	if len(updated.Days) != 7 {
+		t.Fatalf("updated plan has %d days, want 7", len(updated.Days))
+	}
+
+	otherIDs := make(map[uint]bool)
+	for i, day := range updated.Days {
+		if i == 2 {
+			continue
+		}
+		got := weekDayDishIDs(day)
+		if !equalUintSlices(got, before[i]) {
+			t.Errorf("day %d changed: before %v, after %v", i, before[i], got)
+		}
+		for _, id := range got {
+			otherIDs[id] = true
+		}
+	}
+
+	newDay := updated.Days[2]
+	if newDay.Date != target {
+		t.Errorf("regenerated day date = %q, want %q", newDay.Date, target)
+	}
+	if len(newDay.Lunch) != 2 || len(newDay.Dinner) != 1 {
+		t.Errorf("regenerated day quota: lunch %d (want 2), dinner %d (want 1)", len(newDay.Lunch), len(newDay.Dinner))
+	}
+	for _, id := range weekDayDishIDs(newDay) {
+		if otherIDs[id] {
+			t.Errorf("regenerated day reuses dish %d already planned on another day", id)
+		}
+	}
+
+	var recs []models.DishRecommendation
+	database.DB.Where("planned_date = ? AND source = ?", target, recommendationSourceWeekPlan).Find(&recs)
+	newIDs := make(map[uint]bool)
+	for _, id := range weekDayDishIDs(newDay) {
+		newIDs[id] = true
+	}
+	if len(recs) != len(newIDs) {
+		t.Errorf("recommendations for %s: got %d records, want %d", target, len(recs), len(newIDs))
+	}
+	for _, rec := range recs {
+		if !newIDs[rec.DishID] {
+			t.Errorf("stale recommendation for dish %d on %s", rec.DishID, target)
+		}
+	}
+
+	if _, err := RegenerateWeekPlanDay("1999-01-01"); err == nil {
+		t.Errorf("RegenerateWeekPlanDay with unknown date should fail")
+	}
+}

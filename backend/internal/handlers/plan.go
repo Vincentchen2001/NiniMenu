@@ -24,6 +24,25 @@ func RegenerateWeekPlanHandler(c *gin.Context) {
 	utils.Success(c, plan)
 }
 
+type RegenerateWeekPlanDayRequest struct {
+	Date string `json:"date" binding:"required"`
+}
+
+func RegenerateWeekPlanDayHandler(c *gin.Context) {
+	var req RegenerateWeekPlanDayRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "参数无效")
+		return
+	}
+	plan, err := services.RegenerateWeekPlanDay(req.Date)
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	services.RecordAchievementEvent("week_plan", "")
+	utils.Success(c, plan)
+}
+
 func SaveWeekPlanHandler(c *gin.Context) {
 	var plan services.WeekPlan
 	if err := c.ShouldBindJSON(&plan); err != nil {
