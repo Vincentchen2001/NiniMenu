@@ -19,7 +19,11 @@ func GetDishes(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if pageSize < 1 || pageSize > 100 {
+	// pageSize=0 disables pagination: the week-plan/tomorrow dish pickers
+	// need the full eligible list so their client-side search and category
+	// chips cover every dish, not just the first page.
+	fetchAll := pageSize == 0
+	if !fetchAll && (pageSize < 1 || pageSize > 100) {
 		pageSize = 20
 	}
 
@@ -65,9 +69,11 @@ func GetDishes(c *gin.Context) {
 	if isRandom {
 		query.Find(&dishes)
 		rand.Shuffle(len(dishes), func(i, j int) { dishes[i], dishes[j] = dishes[j], dishes[i] })
-		if len(dishes) > pageSize {
+		if !fetchAll && len(dishes) > pageSize {
 			dishes = dishes[:pageSize]
 		}
+	} else if fetchAll {
+		query.Find(&dishes)
 	} else {
 		offset := (page - 1) * pageSize
 		query.Offset(offset).Limit(pageSize).Find(&dishes)
