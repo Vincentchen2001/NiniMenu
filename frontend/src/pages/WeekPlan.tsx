@@ -2,9 +2,21 @@ import { useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { dishesApi, weekPlanApi } from "@/api"
-import type { Dish, DishIngredient, MealQuota, PlanProfile, WeekPlan as WeekPlanType, WeekPlanPeriodPreferences, WeekPlanPreferences } from "@/types"
+import type { DayOverride, Dish, DishIngredient, MealQuota, PlanProfile, WeekPlan as WeekPlanType, WeekPlanPeriodPreferences, WeekPlanPreferences } from "@/types"
 import { asArray } from "@/lib/utils"
 import { exportWeekPlanAsPng } from "@/lib/weekPlanExport"
+import {
+  DAY_FULL_LABELS,
+  DAY_KEYS,
+  MEAL_COUNT_PRESETS,
+  PROTEIN_OPTIONS,
+  WEEKDAY_PACKS,
+  WEEKEND_PACKS,
+  applyPacks,
+} from "@/lib/weekPlanCombos"
+import DayThemeSheet from "@/components/weekplan/DayThemeSheet"
+import DayThemeStrip from "@/components/weekplan/DayThemeStrip"
+import ComboSheet from "@/components/weekplan/ComboSheet"
 import DishImage from "@/components/DishImage"
 import PageHeader from "@/components/PageHeader"
 import toast from "react-hot-toast"
@@ -22,6 +34,7 @@ import {
   Save,
   Search,
   Settings2,
+  Soup,
   Sparkles,
   UtensilsCrossed,
   X,
@@ -60,6 +73,7 @@ const profileOptions: Array<{
   { key: "light", label: "清淡", hint: "少负担", Icon: Leaf },
   { key: "spicy", label: "想吃辣", hint: "重口味", Icon: Flame },
   { key: "favorite", label: "收藏", hint: "优先常吃", Icon: Heart },
+  { key: "soup", label: "靓汤", hint: "保证有汤", Icon: Soup },
 ]
 
 const periodMeta: Record<PeriodKey, { label: string; helper: string; tone: string }> = {
@@ -114,7 +128,35 @@ function normalizePrefs(prefs?: WeekPlanPreferences): WeekPlanPreferences {
   return {
     weekday: normalizePeriod(source.weekday || defaultPrefs.weekday),
     weekend: normalizePeriod(source.weekend || defaultPrefs.weekend),
+    week_want: normalizeWantList(source.week_want),
+    days: normalizeDayOverrides(source.days),
   }
+}
+
+function normalizeWantList(want?: string[]): string[] | undefined {
+  if (!want?.length) return undefined
+  const valid = new Set(PROTEIN_OPTIONS.map((option) => option.key))
+  const result = want.filter((key, index) => valid.has(key) && want.indexOf(key) === index)
+  return result.length ? result : undefined
+}
+
+function normalizeDayOverrides(days?: Record<string, DayOverride>): Record<string, DayOverride> | undefined {
+  if (!days) return undefined
+  const result: Record<string, DayOverride> = {}
+  DAY_KEYS.forEach((dayKey) => {
+    const override = days[dayKey]
+    if (!override) return
+    const profile = override.profile && profileOptions.some((option) => option.key === override.profile)
+      ? override.profile
+      : ""
+    const want = normalizeWantList(override.want)
+    if (!profile && !want) return
+    result[dayKey] = {
+      ...(profile ? { profile } : {}),
+      ...(want ? { want } : {}),
+    }
+  })
+  return Object.keys(result).length ? result : undefined
 }
 
 function normalizePeriod(period: WeekPlanPeriodPreferences): WeekPlanPeriodPreferences {
@@ -601,6 +643,8 @@ export default function WeekPlan() {
   const [dirtyPrefs, setDirtyPrefs] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [picker, setPicker] = useState<{ date: string; meal: MealType } | null>(null)
+  const [themeSheet, setThemeSheet] = useState<string | null>(null)
+  const [comboOpen, setComboOpen] = useState(false)
 
   const { data: serverPlan, isLoading: planLoading } = useQuery({
     queryKey: ["week-plan"],
@@ -686,7 +730,28 @@ export default function WeekPlan() {
     onError: () => toast.error("应用设置失败"),
   })
 
-  const busy = regenerateMut.isPending || savePlanMut.isPending || applyPrefsMut.isPending
+  const regenerateDayMut = useMutation({
+    mutationFn: async (date: string) => {
+      if (dirtyPrefs) {
+        const prefs = await weekPlanApi.updatePreferences(draftPrefs)
+        const nextPrefs = normalizePrefs(prefs)
+        setDraftPrefs(nextPrefs)
+        setDirtyPrefs(false)
+        qc.setQueryData(["week-plan", "preferences"], nextPrefs)
+      }
+      return weekPlanApi.regenerateDay(date)
+    },
+    onSuccess: (plan) => {
+      const next = normalizePlan(plan)
+      setDraftPlan(next)
+      setDirtyPlan(false)
+      qc.setQueryData(["week-plan"], next)
+      toast.success("这一天已重新生成")
+    },
+    onError: () => toast.error("重新生成失败"),
+  })
+
+  const busy = regenerateMut.isPending || savePlanMut.isPending || applyPrefsMut.isPending || regenerateDayMut.isPending
   const loading = planLoading || prefsLoading
 
   function updateProfile(period: PeriodKey, profile: PlanProfile) {
@@ -706,6 +771,52 @@ export default function WeekPlan() {
       },
     }))
     setDirtyPrefs(true)
+  }
+
+  function updateDayOverride(dayKey: string, next: DayOverride) {
+    setDraftPrefs((prev) => normalizePrefs({
+      ...prev,
+      days: { ...(prev.days || {}), [dayKey]: next },
+    }))
+    setDirtyPrefs(true)
+  }
+
+  function toggleWeekWant(key: string) {
+    setDraftPrefs((prev) => {
+      const current = prev.week_want || []
+      const next = current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
+      return normalizePrefs({ ...prev, week_want: next })
+    })
+    setDirtyPrefs(true)
+  }
+
+  function applyMealCountPreset(preset: (typeof MEAL_COUNT_PRESETS)[number]) {
+    setDraftPrefs((prev) => normalizePrefs({
+      ...prev,
+      weekday: { ...prev.weekday, lunch: { ...preset.weekday.lunch }, dinner: { ...preset.weekday.dinner } },
+      weekend: { ...prev.weekend, lunch: { ...preset.weekend.lunch }, dinner: { ...preset.weekend.dinner } },
+    }))
+    setDirtyPrefs(true)
+    toast.success(`已填入${preset.label}，点击应用设置生效`)
+  }
+
+  function applyCombo(weekdayKey: string | null, weekendKey: string | null) {
+    const weekdayPack = WEEKDAY_PACKS.find((pack) => pack.key === weekdayKey) || null
+    const weekendPack = WEEKEND_PACKS.find((pack) => pack.key === weekendKey) || null
+    setDraftPrefs((prev) => normalizePrefs(applyPacks(prev, weekdayPack, weekendPack)))
+    setDirtyPrefs(true)
+    setComboOpen(false)
+    toast.success("已套用组合，点击应用设置生效")
+  }
+
+  function regenerateThemeDay(dayKey: string) {
+    const index = DAY_KEYS.indexOf(dayKey)
+    const date = draftPlan.days[index]?.date
+    if (!date) {
+      toast.error("先生成一周菜单")
+      return
+    }
+    regenerateDayMut.mutate(date)
   }
 
   function addDish(date: string, meal: MealType, dish: Dish) {
@@ -861,6 +972,41 @@ export default function WeekPlan() {
 
           {settingsOpen && (
             <div className="grid gap-3 border-t border-border bg-bg/45 p-3 animate-fadeUp">
+              <div className="rounded-2xl border border-border bg-card p-3">
+                <div className="mb-1 text-[13px] font-extrabold text-text">本周想多吃</div>
+                <div className="mb-2 text-[11px] font-medium text-text3">选中的食材整周都会优先安排</div>
+                <div className="flex flex-wrap gap-2">
+                  {PROTEIN_OPTIONS.map((option) => {
+                    const active = (draftPrefs.week_want || []).includes(option.key)
+                    return (
+                      <button
+                        key={option.key}
+                        onClick={() => toggleWeekWant(option.key)}
+                        className={`rounded-full border px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95 ${
+                          active ? "border-primary bg-primary text-white" : "border-border bg-bg text-text2"
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-border bg-card p-3">
+                <div className="mb-2 text-[13px] font-extrabold text-text">每天吃几道（快捷填入）</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {MEAL_COUNT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.key}
+                      onClick={() => applyMealCountPreset(preset)}
+                      className="rounded-2xl border border-border bg-bg px-2 py-2 text-center transition-all hover:border-primary/40 active:scale-95"
+                    >
+                      <span className="block text-[12px] font-extrabold text-text">{preset.label}</span>
+                      <span className="mt-0.5 block text-[10px] font-medium leading-tight text-text3">{preset.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
               {(["weekday", "weekend"] as PeriodKey[]).map((period) => (
                 <PreferenceCard
                   key={period}
@@ -881,6 +1027,14 @@ export default function WeekPlan() {
             </div>
           )}
         </section>
+
+        <DayThemeStrip
+          days={draftPlan.days}
+          overrides={draftPrefs.days || {}}
+          defaults={{ weekday: draftPrefs.weekday.profile, weekend: draftPrefs.weekend.profile }}
+          onPick={(dayKey) => setThemeSheet(dayKey)}
+          onOpenCombos={() => setComboOpen(true)}
+        />
 
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -937,6 +1091,23 @@ export default function WeekPlan() {
           onAdd={(dish) => addDish(picker.date, picker.meal, dish)}
           onClose={() => setPicker(null)}
         />
+      )}
+
+      {themeSheet && (
+        <DayThemeSheet
+          dayKey={themeSheet}
+          dayLabel={DAY_FULL_LABELS[themeSheet] || themeSheet}
+          value={draftPrefs.days?.[themeSheet] || {}}
+          busy={regenerateDayMut.isPending}
+          canRegenerate={Boolean(draftPlan.days[DAY_KEYS.indexOf(themeSheet)]?.date)}
+          onChange={(next) => updateDayOverride(themeSheet, next)}
+          onRegenerateDay={() => regenerateThemeDay(themeSheet)}
+          onClose={() => setThemeSheet(null)}
+        />
+      )}
+
+      {comboOpen && (
+        <ComboSheet onApply={applyCombo} onClose={() => setComboOpen(false)} />
       )}
     </div>
   )

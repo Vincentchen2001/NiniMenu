@@ -94,6 +94,7 @@ export const weekPlanApi = {
   updateRules: (rules: MenuRule[]) => api<MenuRule[]>("PUT", "/week-plan/rules", { rules }),
   validateRule: (rule: MenuRule) => api<null>("POST", "/week-plan/rules/validate", rule),
   regenerate: () => api<WeekPlan>("POST", "/week-plan/regenerate"),
+  regenerateDay: (date: string) => api<WeekPlan>("POST", "/week-plan/regenerate-day", { date }),
 }
 
 export const shoppingListApi = {

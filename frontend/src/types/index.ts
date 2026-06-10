@@ -190,7 +190,7 @@ export interface WeekPlan {
   warnings?: string[]
 }
 
-export type PlanProfile = "balanced" | "quick" | "light" | "spicy" | "favorite"
+export type PlanProfile = "balanced" | "quick" | "light" | "spicy" | "favorite" | "soup"
 
 export interface MealQuota {
   meat_count: number
@@ -204,9 +204,16 @@ export interface WeekPlanPeriodPreferences {
   dinner: MealQuota
 }
 
+export interface DayOverride {
+  profile?: PlanProfile | ""
+  want?: string[]
+}
+
 export interface WeekPlanPreferences {
   weekday: WeekPlanPeriodPreferences
   weekend: WeekPlanPeriodPreferences
+  week_want?: string[]
+  days?: Record<string, DayOverride>
 }
 
 export interface MenuRule {
@@ -220,6 +227,7 @@ export interface MenuRule {
   severity: string
   relaxable: boolean
   expression: string
+  template?: string
   priority: number
   message: string
   created_at?: string
