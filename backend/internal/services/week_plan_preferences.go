@@ -25,8 +25,24 @@ type WeekPlanPeriodPreferences struct {
 }
 
 type WeekPlanPreferences struct {
-	Weekday WeekPlanPeriodPreferences `json:"weekday"`
-	Weekend WeekPlanPeriodPreferences `json:"weekend"`
+	Weekday  WeekPlanPeriodPreferences `json:"weekday"`
+	Weekend  WeekPlanPeriodPreferences `json:"weekend"`
+	WeekWant []string                  `json:"week_want,omitempty"`
+	Days     map[string]DayOverride    `json:"days,omitempty"`
+}
+
+// DayOverride customizes one weekday ("mon".."sun"). An empty Profile means
+// "follow the period default"; Want lists protein keys to boost that day.
+type DayOverride struct {
+	Profile string   `json:"profile,omitempty"`
+	Want    []string `json:"want,omitempty"`
+}
+
+var weekPlanDayKeys = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+
+var weekPlanProteinKeys = map[string]bool{
+	"pork": true, "beef": true, "lamb": true, "poultry": true,
+	"seafood": true, "egg": true, "soy": true,
 }
 
 func (q MealQuota) total() int {
@@ -87,7 +103,68 @@ func legacyQuotaFromCount(count int) MealQuota {
 func normalizeWeekPlanPreferences(prefs WeekPlanPreferences) WeekPlanPreferences {
 	prefs.Weekday = normalizeWeekPlanPeriodPreferences(prefs.Weekday)
 	prefs.Weekend = normalizeWeekPlanPeriodPreferences(prefs.Weekend)
+	prefs.WeekWant = normalizeWantList(prefs.WeekWant)
+	prefs.Days = normalizeDayOverrides(prefs.Days)
 	return prefs
+}
+
+func normalizeDayOverrides(days map[string]DayOverride) map[string]DayOverride {
+	if len(days) == 0 {
+		return nil
+	}
+	valid := make(map[string]bool, len(weekPlanDayKeys))
+	for _, key := range weekPlanDayKeys {
+		valid[key] = true
+	}
+	result := make(map[string]DayOverride, len(days))
+	for key, override := range days {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if !valid[key] {
+			continue
+		}
+		override.Profile = normalizeOptionalPlanProfile(override.Profile)
+		override.Want = normalizeWantList(override.Want)
+		if override.Profile == "" && len(override.Want) == 0 {
+			continue
+		}
+		result[key] = override
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// normalizeOptionalPlanProfile keeps "" as "follow default" instead of
+// coercing unknown values to balanced like normalizePlanProfile does.
+func normalizeOptionalPlanProfile(profile string) string {
+	profile = strings.TrimSpace(profile)
+	if profile == "" {
+		return ""
+	}
+	if normalizePlanProfile(profile) == profile {
+		return profile
+	}
+	return ""
+}
+
+func normalizeWantList(want []string) []string {
+	if len(want) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(want))
+	result := make([]string, 0, len(want))
+	for _, key := range want {
+		key = strings.ToLower(strings.TrimSpace(key))
+		if weekPlanProteinKeys[key] && !seen[key] {
+			seen[key] = true
+			result = append(result, key)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func normalizeWeekPlanPeriodPreferences(prefs WeekPlanPeriodPreferences) WeekPlanPeriodPreferences {
