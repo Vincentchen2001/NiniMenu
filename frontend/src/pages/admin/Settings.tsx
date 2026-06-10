@@ -1,8 +1,12 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useLocation } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import MenuRuleEditor, { menuRulesEqual } from "@/components/MenuRuleEditor"
+import BlockedIngredientsCard from "@/components/rules/BlockedIngredientsCard"
+import PresetRuleCard from "@/components/rules/PresetRuleCard"
+import RuleSentenceBuilder from "@/components/rules/RuleSentenceBuilder"
 import { settingsApi, shoppingCategoriesApi, weekPlanApi } from "@/api"
+import { parseTemplate } from "@/lib/menuRuleTemplates"
 import { asString } from "@/lib/utils"
 import { useAppInfoStore } from "@/store/useAppInfoStore"
 import type { MenuRule, ShoppingCategoryOverride } from "@/types"
@@ -42,6 +46,7 @@ export default function AdminSettings() {
   const [shoppingItemName, setShoppingItemName] = useState("")
   const [shoppingCategory, setShoppingCategory] = useState("蔬菜")
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [builderOpen, setBuilderOpen] = useState(false)
   const [draftRules, setDraftRules] = useState<MenuRule[]>([])
   const [dirtyRules, setDirtyRules] = useState(false)
   const storedAppName = useAppInfoStore((s) => s.appName)
@@ -60,6 +65,11 @@ export default function AdminSettings() {
       }
       if (variables.app_name !== undefined) {
         updateAppName(variables.app_name || "NiniMenu")
+      }
+      if (variables.blocked_ingredients !== undefined) {
+        qc.invalidateQueries({ queryKey: ["week-plan"] })
+        toast.success("已更新忌口，重新生成菜单后生效")
+        return
       }
       toast.success("已保存")
     },
@@ -127,6 +137,22 @@ export default function AdminSettings() {
 
   const rulesBusy = rulesLoading || saveRulesMut.isPending || validateRuleMut.isPending
 
+  const blockedIngredients = useMemo(() => {
+    try {
+      const parsed = JSON.parse(asString(settings?.blocked_ingredients, "[]"))
+      return Array.isArray(parsed) ? parsed.filter((word): word is string => typeof word === "string") : []
+    } catch {
+      return []
+    }
+  }, [settings])
+
+  const templatedRules = useMemo(
+    () => draftRules.map((rule, index) => ({ rule, index, tpl: parseTemplate(rule) })),
+    [draftRules],
+  )
+  const habitRules = templatedRules.filter(({ rule, tpl }) => tpl && !rule.code.startsWith("custom_rule_"))
+  const customRules = templatedRules.filter(({ rule, tpl }) => tpl && rule.code.startsWith("custom_rule_"))
+
   function saveShoppingCategory() {
     const itemName = shoppingItemName.trim()
     if (!itemName) {
@@ -176,7 +202,7 @@ export default function AdminSettings() {
 
   return (
     <div className="px-5 py-4 max-w-[640px] mx-auto pb-20 space-y-4">
-      <div id="advanced-rules" className="scroll-mt-4 rounded-2xl border border-border bg-card p-4">
+      <div className="rounded-2xl border border-border bg-card p-4">
         <div className="text-[13px] font-semibold text-text2 mb-1">基本设置</div>
         <div className="text-[11px] text-text3 mb-2">应用名称与显示偏好</div>
 
@@ -301,41 +327,129 @@ export default function AdminSettings() {
         </SettingRow>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-4">
-        <button
-          onClick={() => setRulesOpen((value) => !value)}
-          className="flex w-full items-center justify-between gap-3 text-left"
-        >
-          <span className="min-w-0">
-            <span className="flex items-center gap-2 text-[13px] font-semibold text-text2">
-              高级推荐规则
+      <div id="advanced-rules" className="scroll-mt-4 rounded-2xl border border-border bg-card p-4">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-[13px] font-semibold text-text2">
+              推荐规则
               {dirtyRules && <span className="rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-extrabold text-primary">待保存</span>}
-            </span>
-            <span className="mt-1 block text-[11px] text-text3">
-              默认不用调整；用于调试算法常识和自定义表达式。
-            </span>
-          </span>
-          <span className="shrink-0 rounded-full bg-bg px-3 py-1 text-[11px] font-bold text-text3">
-            {rulesOpen ? "收起" : "展开"}
-          </span>
-        </button>
-
-        {rulesOpen && (
-          <div className="mt-3">
-            <MenuRuleEditor
-              rules={draftRules}
-              canEdit
-              dirty={dirtyRules}
-              busy={rulesBusy}
-              onChange={updateRule}
-              onAdd={addRule}
-              onRemove={removeRule}
-              onValidate={(rule) => validateRuleMut.mutate(rule)}
-              onSave={() => saveRulesMut.mutate()}
-            />
+            </div>
+            <div className="mt-1 text-[11px] text-text3">
+              忌口、搭配习惯和自定义规则，影响一周菜单和明天吃什么。
+            </div>
           </div>
-        )}
+          <button
+            onClick={() => saveRulesMut.mutate()}
+            disabled={rulesBusy || !dirtyRules}
+            className="shrink-0 rounded-full bg-primary px-3.5 py-1.5 text-xs font-semibold text-white transition-all active:scale-95 disabled:opacity-45"
+          >
+            保存规则
+          </button>
+        </div>
+
+        <BlockedIngredientsCard
+          value={blockedIngredients}
+          canEdit
+          busy={updateMut.isPending}
+          onSave={(next) => updateMut.mutate({ blocked_ingredients: JSON.stringify(next) })}
+        />
+
+        <div className="mt-4">
+          <div className="mb-1 text-[13px] font-extrabold text-text">🍽 搭配习惯</div>
+          <div className="mb-2 text-[11px] text-text3">开关或调整数量，改完点右上角保存规则。</div>
+          {rulesLoading ? (
+            <div className="py-2 text-xs text-text3">加载中…</div>
+          ) : habitRules.length === 0 ? (
+            <div className="py-2 text-xs text-text3">暂无预设规则</div>
+          ) : (
+            <div className="grid gap-2">
+              {habitRules.map(({ rule, index, tpl }) => (
+                <PresetRuleCard
+                  key={rule.code}
+                  rule={rule}
+                  tpl={tpl!}
+                  canEdit={!rulesBusy}
+                  onChange={(patch) => updateRule(index, patch)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-[13px] font-extrabold text-text">✏️ 我的规则</div>
+              <div className="mt-0.5 text-[11px] text-text3">用一句话描述你家的吃饭习惯。</div>
+            </div>
+            <button
+              onClick={() => setBuilderOpen(true)}
+              className="shrink-0 rounded-full bg-primary-light px-3 py-1.5 text-xs font-extrabold text-primary transition-all active:scale-95"
+            >
+              新建规则
+            </button>
+          </div>
+          {customRules.length === 0 ? (
+            <div className="py-2 text-xs text-text3">还没有自定义规则</div>
+          ) : (
+            <div className="grid gap-2">
+              {customRules.map(({ rule, index, tpl }) => (
+                <PresetRuleCard
+                  key={rule.code}
+                  rule={rule}
+                  tpl={tpl!}
+                  canEdit={!rulesBusy}
+                  onChange={(patch) => updateRule(index, patch)}
+                  onRemove={() => removeRule(index)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 border-t border-border pt-3">
+          <button
+            onClick={() => setRulesOpen((value) => !value)}
+            className="flex w-full items-center justify-between gap-3 text-left"
+          >
+            <span className="min-w-0">
+              <span className="text-[13px] font-semibold text-text2">⚙️ 专家模式</span>
+              <span className="mt-1 block text-[11px] text-text3">
+                直接编辑全部规则的表达式；不熟悉的话保持默认即可。
+              </span>
+            </span>
+            <span className="shrink-0 rounded-full bg-bg px-3 py-1 text-[11px] font-bold text-text3">
+              {rulesOpen ? "收起" : "展开"}
+            </span>
+          </button>
+
+          {rulesOpen && (
+            <div className="mt-3">
+              <MenuRuleEditor
+                rules={draftRules}
+                canEdit
+                dirty={dirtyRules}
+                busy={rulesBusy}
+                onChange={updateRule}
+                onAdd={addRule}
+                onRemove={removeRule}
+                onValidate={(rule) => validateRuleMut.mutate(rule)}
+                onSave={() => saveRulesMut.mutate()}
+              />
+            </div>
+          )}
+        </div>
       </div>
+
+      {builderOpen && (
+        <RuleSentenceBuilder
+          onCreate={(rule) => {
+            setDraftRules((prev) => [...prev, rule])
+            setDirtyRules(true)
+          }}
+          onClose={() => setBuilderOpen(false)}
+        />
+      )}
 
       <div className="rounded-2xl border border-border bg-card p-4">
         <div className="text-[13px] font-semibold text-text2 mb-1">买菜分类修正</div>
