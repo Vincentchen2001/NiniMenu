@@ -107,6 +107,7 @@ func InvalidateWeekPlanCache() {
 func GenerateWeekPlan() (*WeekPlan, error) {
 	var dishes []models.Dish
 	database.DB.Where("enabled = ?", true).Find(&dishes)
+	dishes = FilterBlockedDishes(dishes)
 	if len(dishes) == 0 {
 		return &WeekPlan{}, nil
 	}

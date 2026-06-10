@@ -25,6 +25,7 @@ func PickDishes(mealType string, count int, excludeRecent bool) ([]models.Dish, 
 	}
 
 	query.Find(&dishes)
+	dishes = FilterBlockedDishes(dishes)
 
 	if len(dishes) == 0 {
 		return nil, nil
@@ -37,6 +38,7 @@ func PickDishes(mealType string, count int, excludeRecent bool) ([]models.Dish, 
 	if len(dishes) == 0 {
 		var allDishes []models.Dish
 		database.DB.Where("enabled = ?", true).Find(&allDishes)
+		allDishes = FilterBlockedDishes(allDishes)
 		if mealType != "" {
 			var filtered []models.Dish
 			for _, d := range allDishes {
@@ -100,6 +102,7 @@ func PickTomorrowDishes(opts TomorrowPickOptions) ([]models.Dish, error) {
 		query = query.Where("meal_type IN ?", []string{mealType, "all", ""})
 	}
 	query.Find(&dishes)
+	dishes = FilterBlockedDishes(dishes)
 
 	if len(dishes) == 0 {
 		return nil, nil
