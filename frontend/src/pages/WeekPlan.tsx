@@ -340,7 +340,7 @@ function PreferenceCard({
 }) {
   const meta = periodMeta[period]
   return (
-    <section className="rounded-[24px] border border-border bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
+    <section className="min-w-0 rounded-[24px] border border-border bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[17px] font-extrabold text-text">{meta.label}</div>
@@ -972,7 +972,7 @@ export default function WeekPlan() {
 
           {settingsOpen && (
             <div className="grid gap-3 border-t border-border bg-bg/45 p-3 animate-fadeUp">
-              <div className="rounded-2xl border border-border bg-card p-3">
+              <div className="min-w-0 rounded-2xl border border-border bg-card p-3">
                 <div className="mb-1 text-[13px] font-extrabold text-text">本周想多吃</div>
                 <div className="mb-2 text-[11px] font-medium text-text3">选中的食材整周都会优先安排</div>
                 <div className="flex flex-wrap gap-2">
@@ -992,17 +992,17 @@ export default function WeekPlan() {
                   })}
                 </div>
               </div>
-              <div className="rounded-2xl border border-border bg-card p-3">
+              <div className="min-w-0 rounded-2xl border border-border bg-card p-3">
                 <div className="mb-2 text-[13px] font-extrabold text-text">每天吃几道（快捷填入）</div>
                 <div className="grid grid-cols-3 gap-2">
                   {MEAL_COUNT_PRESETS.map((preset) => (
                     <button
                       key={preset.key}
                       onClick={() => applyMealCountPreset(preset)}
-                      className="rounded-2xl border border-border bg-bg px-2 py-2 text-center transition-all hover:border-primary/40 active:scale-95"
+                      className="min-w-0 rounded-2xl border border-border bg-bg px-2 py-2 text-center transition-all hover:border-primary/40 active:scale-95"
                     >
-                      <span className="block text-[12px] font-extrabold text-text">{preset.label}</span>
-                      <span className="mt-0.5 block text-[10px] font-medium leading-tight text-text3">{preset.desc}</span>
+                      <span className="block truncate text-[12px] font-extrabold text-text">{preset.label}</span>
+                      <span className="mt-0.5 block truncate text-[10px] font-medium leading-tight text-text3" title={preset.desc}>{preset.desc}</span>
                     </button>
                   ))}
                 </div>
