@@ -913,8 +913,8 @@ export default function WeekPlan() {
               <div className="text-[11px] font-bold text-primary/80">总菜数</div>
               <div className="mt-1 text-xl font-extrabold text-primary">{dishCount(draftPlan)}</div>
             </div>
-            <div className="rounded-2xl bg-mint-light px-3 py-3">
-              <div className="text-[11px] font-bold text-mint/80">不推荐</div>
+            <div className="rounded-2xl bg-mint-light px-3 py-3" title="数量设为 0 或没排上菜的餐次">
+              <div className="text-[11px] font-bold text-mint/80">跳过的餐</div>
               <div className="mt-1 text-xl font-extrabold text-mint">{skippedMealCount(draftPlan)}</div>
             </div>
             <div className="rounded-2xl bg-bg px-3 py-3">
