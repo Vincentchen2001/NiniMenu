@@ -238,12 +238,28 @@ func TestRecentDishIDMapIncludesMealRecordsAndRecommendations(t *testing.T) {
 		t.Fatalf("create recommendation: %v", err)
 	}
 
+	// A recommendation planned for a future day (e.g. the tail of the
+	// current week plan) must NOT count as "recently eaten" — otherwise
+	// regenerating the plan excludes everything the previous plan picked.
+	futurePlanned := createDishForPlanTest(t, "后天才排", `["素菜"]`, `[{"name":"青菜","amount":"1把"}]`)
+	if err := database.DB.Create(&models.DishRecommendation{
+		DishID:      futurePlanned.ID,
+		Source:      recommendationSourceWeekPlan,
+		MealType:    "dinner",
+		PlannedDate: time.Now().AddDate(0, 0, 2).Format("2006-01-02"),
+	}).Error; err != nil {
+		t.Fatalf("create future recommendation: %v", err)
+	}
+
 	recent := recentDishIDMap(3)
 	if !recent[recommended.ID] {
 		t.Fatalf("recentDishIDMap() should include recommended dish id %d", recommended.ID)
 	}
 	if !recent[eaten.ID] {
 		t.Fatalf("recentDishIDMap() should include recently eaten dish id %d", eaten.ID)
+	}
+	if recent[futurePlanned.ID] {
+		t.Fatalf("recentDishIDMap() should ignore future-dated recommendation %d", futurePlanned.ID)
 	}
 }
 

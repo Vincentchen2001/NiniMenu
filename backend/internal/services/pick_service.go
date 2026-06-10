@@ -256,14 +256,18 @@ func recentDishIDMap(days int) map[uint]bool {
 		return map[uint]bool{}
 	}
 	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	today := time.Now().Format("2006-01-02")
 	// Pluck into separate slices: GORM resets the destination slice on each
 	// query, so reusing one slice would drop the earlier results.
 	var eatenIDs, recommendedIDs []uint
 	database.DB.Model(&models.MealRecord{}).
 		Where("meal_date >= ?", since).
 		Pluck("dish_id", &eatenIDs)
+	// Cap at today: recommendations planned for future days (the tail of
+	// the current week plan) are not "recently eaten" — counting them made
+	// every regeneration avoid the previous plan's dishes.
 	database.DB.Model(&models.DishRecommendation{}).
-		Where("planned_date >= ?", since).
+		Where("planned_date >= ? AND planned_date <= ?", since, today).
 		Pluck("dish_id", &recommendedIDs)
 
 	result := make(map[uint]bool, len(eatenIDs)+len(recommendedIDs))
