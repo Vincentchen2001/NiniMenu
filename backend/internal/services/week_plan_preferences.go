@@ -29,14 +29,6 @@ type WeekPlanPreferences struct {
 	Weekend WeekPlanPeriodPreferences `json:"weekend"`
 }
 
-type dishProteinKind string
-
-const (
-	dishProteinMeat  dishProteinKind = "meat"
-	dishProteinVeg   dishProteinKind = "veg"
-	dishProteinOther dishProteinKind = "other"
-)
-
 func (q MealQuota) total() int {
 	return q.MeatCount + q.VegCount + q.SoupCount
 }
@@ -131,67 +123,12 @@ func clampInt(value int, min int, max int) int {
 	return value
 }
 
-func classifyDishProteinKind(dish models.Dish) dishProteinKind {
-	tags := parseTags(dish.Tags)
-	textParts := []string{dish.Name, dish.Category, dish.Taste}
-	textParts = append(textParts, tags...)
-	textParts = append(textParts, ingredientNames(dish.Ingredients)...)
-	text := strings.Join(textParts, " ")
-
-	if containsAnyKeyword(text, meatDishKeywords) {
-		return dishProteinMeat
-	}
-	if hasVegTag(tags) || containsAnyKeyword(text, vegDishKeywords) {
-		return dishProteinVeg
-	}
-	return dishProteinOther
-}
-
 func isSoupDish(dish models.Dish) bool {
 	tags := parseTags(dish.Tags)
 	textParts := []string{dish.Name, dish.Category}
 	textParts = append(textParts, tags...)
 	text := strings.Join(textParts, " ")
 	return containsAnyKeyword(text, soupDishKeywords)
-}
-
-func ingredientNames(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-
-	var named []struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(raw), &named); err == nil {
-		var result []string
-		for _, item := range named {
-			if item.Name != "" {
-				result = append(result, item.Name)
-			}
-		}
-		if len(result) > 0 {
-			return result
-		}
-	}
-
-	var stringsOnly []string
-	if err := json.Unmarshal([]byte(raw), &stringsOnly); err == nil {
-		return stringsOnly
-	}
-
-	return []string{raw}
-}
-
-func hasVegTag(tags []string) bool {
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		if tag == "素菜" || tag == "纯素" || tag == "蔬菜" || tag == "青菜" {
-			return true
-		}
-	}
-	return false
 }
 
 func containsAnyKeyword(text string, keywords []string) bool {
@@ -201,19 +138,6 @@ func containsAnyKeyword(text string, keywords []string) bool {
 		}
 	}
 	return false
-}
-
-var meatDishKeywords = []string{
-	"肉", "猪", "牛", "羊", "鸡", "鸭", "鹅", "鱼", "虾", "蟹", "贝", "蛤",
-	"鱿", "墨鱼", "章鱼", "蛋", "排骨", "五花", "培根", "腊肠", "香肠", "火腿",
-	"肥肠", "猪肝", "牛腩", "鸡翅", "鸡腿", "鸡胸", "里脊",
-}
-
-var vegDishKeywords = []string{
-	"青菜", "白菜", "生菜", "菠菜", "油麦", "西兰花", "花菜", "豆腐", "豆芽",
-	"土豆", "番茄", "西红柿", "黄瓜", "茄子", "南瓜", "冬瓜", "丝瓜", "苦瓜",
-	"萝卜", "胡萝卜", "蘑菇", "香菇", "金针菇", "平菇", "木耳", "芹菜", "莴笋",
-	"藕", "玉米", "豌豆", "四季豆", "荷兰豆", "空心菜", "韭菜",
 }
 
 var soupDishKeywords = []string{

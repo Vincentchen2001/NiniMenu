@@ -90,16 +90,17 @@ func createDishForPlanTest(t *testing.T, name string, tags string, ingredients s
 	return dish
 }
 
+// countDishKinds counts slot kinds with the same strict-role view the planner
+// uses to fill quotas (matchesWeekPlanSlot with strictRole=true).
 func countDishKinds(dishes []models.Dish) (meat int, veg int, soup int) {
 	for _, dish := range dishes {
-		if isSoupDish(dish) {
+		dish = ensureDishTraits(dish)
+		switch {
+		case matchesWeekPlanSlot(dish, weekPlanSlotSoup, true):
 			soup++
-			continue
-		}
-		switch classifyDishProteinKind(dish) {
-		case dishProteinMeat:
+		case matchesWeekPlanSlot(dish, weekPlanSlotMeat, true):
 			meat++
-		case dishProteinVeg:
+		case matchesWeekPlanSlot(dish, weekPlanSlotVeg, true):
 			veg++
 		}
 	}
@@ -217,40 +218,31 @@ func TestRecentDishIDMapUsesRecommendationHistoryAndSetting(t *testing.T) {
 	}
 }
 
-func TestClassifyDishProteinKind(t *testing.T) {
-	tests := []struct {
-		name string
-		dish models.Dish
-		want dishProteinKind
-	}{
-		{
-			name: "pure veg tag",
-			dish: models.Dish{Name: "蒜蓉青菜", Tags: `["素菜"]`, Ingredients: `[{"name":"青菜","amount":"1把"}]`},
-			want: dishProteinVeg,
-		},
-		{
-			name: "meat ingredient",
-			dish: models.Dish{Name: "青椒肉丝", Tags: `["家常菜"]`, Ingredients: `[{"name":"猪肉","amount":"100g"},{"name":"青椒","amount":"1个"}]`},
-			want: dishProteinMeat,
-		},
-		{
-			name: "veg tag with egg counts as meat",
-			dish: models.Dish{Name: "番茄炒蛋", Tags: `["素菜"]`, Ingredients: `[{"name":"鸡蛋","amount":"2个"},{"name":"番茄","amount":"2个"}]`},
-			want: dishProteinMeat,
-		},
-		{
-			name: "name keyword fallback",
-			dish: models.Dish{Name: "虾仁滑蛋", Tags: `[]`, Ingredients: `[]`},
-			want: dishProteinMeat,
-		},
+func TestRecentDishIDMapIncludesMealRecordsAndRecommendations(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	eaten := createDishForPlanTest(t, "最近吃过", `["家常菜"]`, `[{"name":"猪肉","amount":"100g"}]`)
+	recommended := createDishForPlanTest(t, "最近推荐", `["素菜"]`, `[{"name":"豆腐","amount":"1块"}]`)
+
+	today := time.Now().Format("2006-01-02")
+	if err := database.DB.Create(&models.MealRecord{DishID: eaten.ID, MealDate: today}).Error; err != nil {
+		t.Fatalf("create meal record: %v", err)
+	}
+	if err := database.DB.Create(&models.DishRecommendation{
+		DishID:      recommended.ID,
+		Source:      recommendationSourceWeekPlan,
+		MealType:    "dinner",
+		PlannedDate: today,
+	}).Error; err != nil {
+		t.Fatalf("create recommendation: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := classifyDishProteinKind(tt.dish); got != tt.want {
-				t.Fatalf("classifyDishProteinKind() = %q, want %q", got, tt.want)
-			}
-		})
+	recent := recentDishIDMap(3)
+	if !recent[recommended.ID] {
+		t.Fatalf("recentDishIDMap() should include recommended dish id %d", recommended.ID)
+	}
+	if !recent[eaten.ID] {
+		t.Fatalf("recentDishIDMap() should include recently eaten dish id %d", eaten.ID)
 	}
 }
 
@@ -381,6 +373,52 @@ func TestValidateMenuRuleExpression(t *testing.T) {
 	}
 	if err := ValidateMenuRuleExpression(scoreRule); err != nil {
 		t.Fatalf("ValidateMenuRuleExpression(score) error = %v", err)
+	}
+}
+
+func TestEvaluateConstraintRulesRelaxableSemantics(t *testing.T) {
+	dish := models.Dish{Name: "测试菜"}
+	quota := MealQuota{MeatCount: 1}
+
+	tests := []struct {
+		name        string
+		severity    string
+		relaxable   bool
+		enforceSoft bool
+		wantAllowed bool
+	}{
+		{name: "hard non-relaxable blocks in strict stage", severity: "hard", relaxable: false, enforceSoft: true, wantAllowed: false},
+		{name: "hard non-relaxable blocks in relaxed stage", severity: "hard", relaxable: false, enforceSoft: false, wantAllowed: false},
+		{name: "soft non-relaxable blocks in strict stage", severity: "soft", relaxable: false, enforceSoft: true, wantAllowed: false},
+		{name: "soft non-relaxable blocks in relaxed stage", severity: "soft", relaxable: false, enforceSoft: false, wantAllowed: false},
+		{name: "hard relaxable blocks in strict stage", severity: "hard", relaxable: true, enforceSoft: true, wantAllowed: false},
+		{name: "hard relaxable passes in relaxed stage", severity: "hard", relaxable: true, enforceSoft: false, wantAllowed: true},
+		{name: "soft relaxable blocks in strict stage", severity: "soft", relaxable: true, enforceSoft: true, wantAllowed: false},
+		{name: "soft relaxable passes in relaxed stage", severity: "soft", relaxable: true, enforceSoft: false, wantAllowed: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule := models.MenuRule{
+				Code:       "always_violated",
+				Name:       "恒不满足的约束",
+				Enabled:    true,
+				Scope:      "meal",
+				RuleKind:   "constraint",
+				Severity:   tt.severity,
+				Relaxable:  tt.relaxable,
+				Expression: `false`,
+				Message:    "测试约束拦截",
+			}
+			compiled, err := compileMenuRule(rule)
+			if err != nil {
+				t.Fatalf("compile rule: %v", err)
+			}
+			allowed, _ := evaluateConstraintRules(dish, "balanced", quota, nil, nil, nil, []compiledMenuRule{compiled}, tt.enforceSoft)
+			if allowed != tt.wantAllowed {
+				t.Fatalf("evaluateConstraintRules(severity=%s relaxable=%v enforceSoft=%v) allowed = %v, want %v", tt.severity, tt.relaxable, tt.enforceSoft, allowed, tt.wantAllowed)
+			}
+		})
 	}
 }
 
