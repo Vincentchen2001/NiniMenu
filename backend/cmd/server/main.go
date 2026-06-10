@@ -5,6 +5,7 @@ import (
 	"ninimenu/internal/config"
 	"ninimenu/internal/database"
 	"ninimenu/internal/routes"
+	"ninimenu/internal/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,6 +15,11 @@ func main() {
 
 	if err := database.Init(); err != nil {
 		panic(fmt.Sprintf("数据库初始化失败: %v", err))
+	}
+	// Settles the rule seed migration at boot instead of on first request;
+	// a failure here is retried by ListMenuRules, so only warn.
+	if err := services.EnsureDefaultMenuRules(); err != nil {
+		fmt.Printf("默认推荐规则初始化失败（首次访问时会重试）: %v\n", err)
 	}
 
 	r := gin.Default()

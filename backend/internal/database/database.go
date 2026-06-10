@@ -53,7 +53,6 @@ func Init() error {
 
 	seedData()
 	backfillDishTraits()
-	seedMenuRules()
 	return nil
 }
 
@@ -196,16 +195,6 @@ func backfillDishTraits() {
 			"trait_source":        inferred.TraitSource,
 			"trait_version":       inferred.TraitVersion,
 		})
-	}
-}
-
-func seedMenuRules() {
-	for _, rule := range models.DefaultMenuRules() {
-		var existing models.MenuRule
-		if err := DB.Where("code = ?", rule.Code).First(&existing).Error; err == nil {
-			continue
-		}
-		DB.Create(&rule)
 	}
 }
 
