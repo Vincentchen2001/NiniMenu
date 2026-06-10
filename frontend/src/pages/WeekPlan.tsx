@@ -267,7 +267,7 @@ function ProfileButton({
   return (
     <button
       onClick={onClick}
-      className={`flex min-w-[88px] shrink-0 items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-all active:scale-95 ${
+      className={`flex min-w-0 items-center gap-2 rounded-2xl border px-3 py-2 text-left transition-all active:scale-95 ${
         active ? "border-primary bg-primary-light text-primary" : "border-border bg-card text-text2 hover:border-primary/30"
       }`}
     >
@@ -350,7 +350,7 @@ function PreferenceCard({
           {quotaTotal(value.lunch) + quotaTotal(value.dinner)} 道/天
         </span>
       </div>
-      <div className="mb-3 flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+      <div className="mb-3 grid grid-cols-3 gap-2">
         {profileOptions.map((option) => (
           <ProfileButton
             key={option.key}
