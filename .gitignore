@@ -13,3 +13,4 @@
 # Logs and OS metadata
 *.log
 .DS_Store
+.superpowers/
