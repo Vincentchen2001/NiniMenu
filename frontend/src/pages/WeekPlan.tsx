@@ -176,12 +176,27 @@ function quotaTotal(quota: MealQuota) {
   return quota.meat_count + quota.veg_count + quota.soup_count
 }
 
-function dishCount(plan: WeekPlanType) {
-  return plan.days.reduce((sum, day) => sum + day.lunch.length + day.dinner.length, 0)
+const FAVORITE_LOW_THRESHOLD = 3
+
+type WeekBadgeCounts = { meat: number; veg: number; soup: number; favorite: number }
+
+function weekBadgeCounts(plan: WeekPlanType): WeekBadgeCounts {
+  const counts: WeekBadgeCounts = { meat: 0, veg: 0, soup: 0, favorite: 0 }
+  for (const day of plan.days) {
+    for (const dish of [...day.lunch, ...day.dinner]) {
+      if (dish.dish_role === "meat") counts.meat += 1
+      else if (dish.dish_role === "veg") counts.veg += 1
+      else if (dish.dish_role === "soup") counts.soup += 1
+      if (dish.favorite) counts.favorite += 1
+    }
+  }
+  return counts
 }
 
-function skippedMealCount(plan: WeekPlanType) {
-  return plan.days.reduce((sum, day) => sum + (day.lunch.length === 0 ? 1 : 0) + (day.dinner.length === 0 ? 1 : 0), 0)
+function badgeClass(attention: boolean) {
+  return `inline-flex h-8 items-center gap-1 rounded-full px-3 text-[12px] font-bold ${
+    attention ? "bg-primary-light text-primary" : "bg-bg text-text2"
+  }`
 }
 
 function dateRange(plan: WeekPlanType) {
@@ -689,6 +704,8 @@ export default function WeekPlan() {
     return set
   }, [activePickerDay])
 
+  const badges = useMemo(() => weekBadgeCounts(draftPlan), [draftPlan])
+
   const regenerateMut = useMutation({
     mutationFn: () => weekPlanApi.regenerate(),
     onSuccess: (plan) => {
@@ -908,19 +925,14 @@ export default function WeekPlan() {
 
       <div className="mx-auto max-w-[640px] px-5 py-4">
         <section className="mb-4 rounded-[24px] border border-border bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-2xl bg-primary-light px-3 py-3">
-              <div className="text-[11px] font-bold text-primary/80">总菜数</div>
-              <div className="mt-1 text-xl font-extrabold text-primary">{dishCount(draftPlan)}</div>
-            </div>
-            <div className="rounded-2xl bg-mint-light px-3 py-3" title="数量设为 0 或没排上菜的餐次">
-              <div className="text-[11px] font-bold text-mint/80">跳过的餐</div>
-              <div className="mt-1 text-xl font-extrabold text-mint">{skippedMealCount(draftPlan)}</div>
-            </div>
-            <div className="rounded-2xl bg-bg px-3 py-3">
-              <div className="text-[11px] font-bold text-text3">状态</div>
-              <div className="mt-1 truncate text-[13px] font-extrabold text-text">{dirtyPlan || dirtyPrefs ? "有改动" : "已同步"}</div>
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={badgeClass(badges.meat === 0)}>🥩 荤 {badges.meat}</span>
+            <span className={badgeClass(badges.veg === 0)}>🥬 素 {badges.veg}</span>
+            <span className={badgeClass(badges.soup === 0)}>🍲 汤 {badges.soup}</span>
+            <span className={badgeClass(badges.favorite < FAVORITE_LOW_THRESHOLD)}>❤️ 收藏 {badges.favorite}</span>
+            <span className={`ml-auto ${badgeClass(dirtyPlan || dirtyPrefs)}`}>
+              {dirtyPlan || dirtyPrefs ? "● 未保存" : "✓ 已同步"}
+            </span>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
