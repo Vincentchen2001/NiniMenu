@@ -3,6 +3,7 @@ package services
 import (
 	"testing"
 
+	"ninimenu/internal/database"
 	"ninimenu/internal/models"
 )
 
@@ -199,5 +200,199 @@ func TestDishRuleEnvIncludesIngredients(t *testing.T) {
 	env := dishRuleEnv(dish)
 	if !containsString(env.Ingredients, "香菜") || !containsString(env.Ingredients, "牛肉") {
 		t.Fatalf("dishRuleEnv ingredients = %v, want 牛肉+香菜", env.Ingredients)
+	}
+}
+
+func TestCountOverlapDayAndWeekHelpers(t *testing.T) {
+	compiled := compileTemplateRule(t, `{"type":"no_repeat","scope":"week","n":2,"points":20}`)
+	pork := ruleDishEnv{Name: "回锅肉", ProteinSources: []string{"pork"}}
+	weekWithTwoPork := []ruleDishEnv{
+		{Name: "红烧肉", ProteinSources: []string{"pork"}},
+		{Name: "糖醋排骨", ProteinSources: []string{"pork"}},
+	}
+
+	if got := runTemplateScore(t, compiled, templateRuleEnv(pork, nil, nil, weekWithTwoPork)); got != -20 {
+		t.Errorf("third pork dish of the week = %v, want -20", got)
+	}
+	if got := runTemplateScore(t, compiled, templateRuleEnv(pork, nil, nil, nil)); got != 0 {
+		t.Errorf("pork with empty week = %v, want 0", got)
+	}
+
+	dayRule := models.MenuRule{
+		Code:       "overlap_day_probe",
+		Name:       "day overlap",
+		RuleKind:   menuRuleKindScore,
+		Expression: `countOverlapDay("protein_sources", candidate.protein_sources) >= 1 ? -9 : 0`,
+	}
+	compiledDay, err := compileMenuRule(dayRule)
+	if err != nil {
+		t.Fatalf("compile countOverlapDay rule: %v", err)
+	}
+	dayWithPork := []ruleDishEnv{{Name: "卤肉饭", ProteinSources: []string{"pork"}}}
+	if got := runTemplateScore(t, compiledDay, templateRuleEnv(pork, nil, dayWithPork, nil)); got != -9 {
+		t.Errorf("countOverlapDay with pork day = %v, want -9", got)
+	}
+	if got := runTemplateScore(t, compiledDay, templateRuleEnv(pork, nil, nil, nil)); got != 0 {
+		t.Errorf("countOverlapDay with empty day = %v, want 0", got)
+	}
+}
+
+func TestDefaultMenuRuleTemplatesMatchExpressions(t *testing.T) {
+	defaults := models.DefaultMenuRules()
+	if len(defaults) != 9 {
+		t.Fatalf("DefaultMenuRules() has %d rules, want 9", len(defaults))
+	}
+	for _, rule := range defaults {
+		if rule.Template == "" {
+			t.Errorf("rule %s has no template", rule.Code)
+			continue
+		}
+		clone := rule
+		clone.Expression = ""
+		if err := ApplyMenuRuleTemplate(&clone); err != nil {
+			t.Errorf("rule %s template render failed: %v", rule.Code, err)
+			continue
+		}
+		if clone.Expression != rule.Expression {
+			t.Errorf("rule %s expression drift:\nstored:   %s\nrendered: %s", rule.Code, rule.Expression, clone.Expression)
+		}
+		if clone.RuleKind != rule.RuleKind || clone.Severity != rule.Severity || clone.Relaxable != rule.Relaxable || clone.Scope != rule.Scope {
+			t.Errorf("rule %s rendered meta mismatch: kind=%s/%s severity=%s/%s relaxable=%v/%v scope=%s/%s",
+				rule.Code, clone.RuleKind, rule.RuleKind, clone.Severity, rule.Severity, clone.Relaxable, rule.Relaxable, clone.Scope, rule.Scope)
+		}
+		if _, err := compileMenuRule(rule); err != nil {
+			t.Errorf("rule %s does not compile: %v", rule.Code, err)
+		}
+	}
+}
+
+// legacyV1MenuRulesForTest is the verbatim pre-migration factory rule set.
+func legacyV1MenuRulesForTest() []models.MenuRule {
+	return []models.MenuRule{
+		{Code: "avoid_double_egg", Name: "同餐蛋类最多一份", Enabled: true, Scope: "meal", RuleKind: "constraint", Severity: "hard", Relaxable: false, Expression: `!has(candidate.protein_sources, "egg") || countMeal("protein_sources", "egg") == 0`, Priority: 10},
+		{Code: "limit_cold_dishes", Name: "同餐凉菜最多一份", Enabled: true, Scope: "meal", RuleKind: "constraint", Severity: "hard", Relaxable: false, Expression: `candidate.serving_temperature != "cold" || countMeal("serving_temperature", "cold") == 0`, Priority: 20},
+		{Code: "limit_staples", Name: "同餐主食最多一份", Enabled: true, Scope: "meal", RuleKind: "constraint", Severity: "hard", Relaxable: false, Expression: `candidate.dish_role != "staple" || countMeal("dish_role", "staple") == 0`, Priority: 30},
+		{Code: "avoid_same_primary_protein", Name: "同餐主蛋白重复降分", Enabled: true, Scope: "meal", RuleKind: "score", Severity: "soft", Relaxable: true, Expression: `countOverlapMeal("protein_sources", candidate.protein_sources) > 0 && !hasOnly(candidate.protein_sources, "soy") ? -14 : 0`, Priority: 40},
+		{Code: "quick_profile_bonus", Name: "快手画像加分", Enabled: true, Scope: "candidate", RuleKind: "score", Severity: "soft", Relaxable: true, Expression: `profile == "quick" && (candidate.difficulty == "easy" || candidate.cook_time <= 25) ? 24 : 0`, Priority: 100},
+		{Code: "light_profile_bonus", Name: "清淡画像加分", Enabled: true, Scope: "candidate", RuleKind: "score", Severity: "soft", Relaxable: true, Expression: `profile == "light" && candidate.spice_level == 0 && candidate.richness_level <= 1 ? 22 : 0`, Priority: 110},
+		{Code: "spicy_profile_bonus", Name: "辣味画像加分", Enabled: true, Scope: "candidate", RuleKind: "score", Severity: "soft", Relaxable: true, Expression: `profile == "spicy" && candidate.spice_level > 0 ? 24 : 0`, Priority: 120},
+		{Code: "favorite_profile_bonus", Name: "收藏画像加分", Enabled: true, Scope: "candidate", RuleKind: "score", Severity: "soft", Relaxable: true, Expression: `profile == "favorite" && candidate.favorite ? 36 : 0`, Priority: 130},
+		{Code: "hot_cold_balance_bonus", Name: "冷热搭配加分", Enabled: true, Scope: "meal", RuleKind: "score", Severity: "soft", Relaxable: true, Expression: `(candidate.serving_temperature == "cold" && countMeal("serving_temperature", "hot") > 0) || (candidate.serving_temperature == "hot" && countMeal("serving_temperature", "cold") > 0) ? 6 : 0`, Priority: 200},
+		{Code: "avoid_heavy_spicy_day", Name: "重油重辣不连续", Enabled: true, Scope: "day", RuleKind: "score", Severity: "soft", Relaxable: true, Expression: `candidate.spice_level >= 2 && candidate.richness_level >= 2 && countDay("heavy_spicy", "true") > 0 ? -18 : 0`, Priority: 210},
+	}
+}
+
+func menuRuleCodeSet(rules []models.MenuRule) map[string]models.MenuRule {
+	result := make(map[string]models.MenuRule, len(rules))
+	for _, rule := range rules {
+		result[rule.Code] = rule
+	}
+	return result
+}
+
+func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	for _, rule := range legacyV1MenuRulesForTest() {
+		rule := rule
+		if err := database.DB.Create(&rule).Error; err != nil {
+			t.Fatalf("seed legacy rule %s: %v", rule.Code, err)
+		}
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("EnsureDefaultMenuRules() error = %v", err)
+	}
+
+	var rules []models.MenuRule
+	if err := database.DB.Find(&rules).Error; err != nil {
+		t.Fatalf("load rules: %v", err)
+	}
+	got := menuRuleCodeSet(rules)
+
+	wantCodes := []string{
+		"avoid_double_egg", "limit_cold_dishes", "limit_staples",
+		"avoid_same_primary_protein", "avoid_heavy_spicy_day",
+		"spicy_meal_spread", "slow_meal_spread",
+		"weekly_protein_variety", "weekly_fried_limit",
+	}
+	if len(rules) != len(wantCodes) {
+		t.Errorf("after migration %d rules, want %d (%v)", len(rules), len(wantCodes), got)
+	}
+	for _, code := range wantCodes {
+		rule, ok := got[code]
+		if !ok {
+			t.Errorf("missing rule %s after migration", code)
+			continue
+		}
+		if rule.Template == "" {
+			t.Errorf("rule %s has no template after migration", code)
+		}
+	}
+	for _, code := range []string{"quick_profile_bonus", "light_profile_bonus", "spicy_profile_bonus", "favorite_profile_bonus", "hot_cold_balance_bonus"} {
+		if _, ok := got[code]; ok {
+			t.Errorf("dropped rule %s still present after migration", code)
+		}
+	}
+
+	var setting models.Setting
+	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
+		t.Fatalf("seed version setting missing: %v", err)
+	}
+	if setting.Value != "2" {
+		t.Errorf("seed version = %q, want 2", setting.Value)
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("second EnsureDefaultMenuRules() error = %v", err)
+	}
+	var countAfter int64
+	database.DB.Model(&models.MenuRule{}).Count(&countAfter)
+	if countAfter != int64(len(wantCodes)) {
+		t.Errorf("second ensure changed rule count to %d", countAfter)
+	}
+}
+
+func TestEnsureDefaultMenuRulesKeepsUserModifiedRules(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	customDropped := models.MenuRule{
+		Code: "quick_profile_bonus", Name: "我的快手规则", Enabled: true,
+		Scope: "candidate", RuleKind: "score", Severity: "soft", Relaxable: true,
+		Expression: `profile == "quick" ? 50 : 0`,
+	}
+	customKept := models.MenuRule{
+		Code: "avoid_double_egg", Name: "我的蛋类规则", Enabled: true,
+		Scope: "meal", RuleKind: "constraint", Severity: "hard", Relaxable: false,
+		Expression: `!has(candidate.protein_sources, "egg") || countMeal("protein_sources", "egg") < 2`,
+	}
+	for _, rule := range []models.MenuRule{customDropped, customKept} {
+		rule := rule
+		if err := database.DB.Create(&rule).Error; err != nil {
+			t.Fatalf("seed custom rule %s: %v", rule.Code, err)
+		}
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("EnsureDefaultMenuRules() error = %v", err)
+	}
+
+	var dropped models.MenuRule
+	if err := database.DB.Where("code = ?", "quick_profile_bonus").First(&dropped).Error; err != nil {
+		t.Fatalf("user-modified dropped rule should survive migration: %v", err)
+	}
+	if dropped.Expression != `profile == "quick" ? 50 : 0` {
+		t.Errorf("user-modified dropped rule expression changed: %q", dropped.Expression)
+	}
+
+	var kept models.MenuRule
+	if err := database.DB.Where("code = ?", "avoid_double_egg").First(&kept).Error; err != nil {
+		t.Fatalf("kept rule missing: %v", err)
+	}
+	if kept.Expression != `!has(candidate.protein_sources, "egg") || countMeal("protein_sources", "egg") < 2` {
+		t.Errorf("user-modified kept rule was overwritten: %q", kept.Expression)
+	}
+	if kept.Name != "我的蛋类规则" {
+		t.Errorf("user-modified kept rule renamed: %q", kept.Name)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/expr-lang/expr"
@@ -64,33 +65,59 @@ func ListMenuRules() ([]models.MenuRule, error) {
 	return rules, nil
 }
 
+const (
+	menuRulesSeedVersionKey = "menu_rules_seed_version"
+	menuRulesSeedVersion    = 2
+)
+
+// droppedMenuRuleExpressions lists pre-v2 default rules that no longer ship.
+// Migration deletes them only while their expression is still the factory
+// string; user-modified copies survive.
+var droppedMenuRuleExpressions = map[string]string{
+	"quick_profile_bonus":    `profile == "quick" && (candidate.difficulty == "easy" || candidate.cook_time <= 25) ? 24 : 0`,
+	"light_profile_bonus":    `profile == "light" && candidate.spice_level == 0 && candidate.richness_level <= 1 ? 22 : 0`,
+	"spicy_profile_bonus":    `profile == "spicy" && candidate.spice_level > 0 ? 24 : 0`,
+	"favorite_profile_bonus": `profile == "favorite" && candidate.favorite ? 36 : 0`,
+	"hot_cold_balance_bonus": `(candidate.serving_temperature == "cold" && countMeal("serving_temperature", "hot") > 0) || (candidate.serving_temperature == "hot" && countMeal("serving_temperature", "cold") > 0) ? 6 : 0`,
+}
+
+// legacyMenuRuleExpressions lists earlier factory variants of the kept codes;
+// a row still matching one of these gets replaced with the v2 definition.
+var legacyMenuRuleExpressions = map[string][]string{
+	"avoid_double_egg":  {`!has(candidate.protein_sources, "egg") || countMeal("protein_sources", "egg") == 0`},
+	"limit_cold_dishes": {`candidate.serving_temperature != "cold" || countMeal("serving_temperature", "cold") == 0`},
+	"limit_staples":     {`candidate.dish_role != "staple" || countMeal("dish_role", "staple") == 0`},
+	"avoid_same_primary_protein": {
+		`countOverlapMeal("protein_sources", candidate.protein_sources) > 0 && !hasOnly(candidate.protein_sources, "soy") ? -14 : 0`,
+		`countOverlapMeal("protein_sources", candidate.protein_sources) == 0 || hasOnly(candidate.protein_sources, "soy")`,
+	},
+	"avoid_heavy_spicy_day": {`candidate.spice_level >= 2 && candidate.richness_level >= 2 && countDay("heavy_spicy", "true") > 0 ? -18 : 0`},
+}
+
 func EnsureDefaultMenuRules() error {
 	if database.DB == nil {
 		return nil
 	}
+	if getSettingInt(menuRulesSeedVersionKey, 0) < menuRulesSeedVersion {
+		if err := migrateMenuRulesToV2(); err != nil {
+			return err
+		}
+		return setSettingValue(menuRulesSeedVersionKey, strconv.Itoa(menuRulesSeedVersion))
+	}
+
+	// Seeded already: only repopulate a completely empty table (fresh DB
+	// restored with settings); individual user deletions stay deleted.
 	var count int64
 	if err := database.DB.Model(&models.MenuRule{}).Count(&count).Error; err != nil {
 		return err
 	}
+	if count > 0 {
+		return nil
+	}
 	for _, rule := range models.DefaultMenuRules() {
+		rule := rule
 		if err := normalizeAndValidateMenuRule(&rule); err != nil {
 			return err
-		}
-		var existing models.MenuRule
-		if err := database.DB.Where("code = ?", rule.Code).First(&existing).Error; err == nil {
-			if shouldRefreshDefaultMenuRule(existing, rule) {
-				rule.ID = existing.ID
-				rule.CreatedAt = existing.CreatedAt
-				if err := database.DB.Save(&rule).Error; err != nil {
-					return err
-				}
-			}
-			continue
-		} else if err != nil && err != gorm.ErrRecordNotFound {
-			return err
-		}
-		if count > 0 {
-			continue
 		}
 		if err := database.DB.Create(&rule).Error; err != nil {
 			return err
@@ -99,18 +126,78 @@ func EnsureDefaultMenuRules() error {
 	return nil
 }
 
-func shouldRefreshDefaultMenuRule(existing models.MenuRule, current models.MenuRule) bool {
-	if existing.Code != "avoid_same_primary_protein" {
-		return false
+func migrateMenuRulesToV2() error {
+	for code, factoryExpression := range droppedMenuRuleExpressions {
+		var existing models.MenuRule
+		err := database.DB.Where("code = ?", code).First(&existing).Error
+		if err == gorm.ErrRecordNotFound {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(existing.Expression) == factoryExpression {
+			if err := database.DB.Delete(&existing).Error; err != nil {
+				return err
+			}
+		}
 	}
-	return existing.RuleKind == menuRuleKindConstraint &&
-		existing.Severity == "hard" &&
-		!existing.Relaxable &&
-		strings.TrimSpace(existing.Expression) == `countOverlapMeal("protein_sources", candidate.protein_sources) == 0 || hasOnly(candidate.protein_sources, "soy")` &&
-		current.RuleKind == menuRuleKindScore
+
+	for _, rule := range models.DefaultMenuRules() {
+		rule := rule
+		if err := normalizeAndValidateMenuRule(&rule); err != nil {
+			return err
+		}
+		var existing models.MenuRule
+		err := database.DB.Where("code = ?", rule.Code).First(&existing).Error
+		if err == gorm.ErrRecordNotFound {
+			if err := database.DB.Create(&rule).Error; err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if isFactoryMenuRuleExpression(rule.Code, existing.Expression) {
+			rule.ID = existing.ID
+			rule.CreatedAt = existing.CreatedAt
+			if err := database.DB.Save(&rule).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isFactoryMenuRuleExpression(code string, expression string) bool {
+	expression = strings.TrimSpace(expression)
+	for _, legacy := range legacyMenuRuleExpressions[code] {
+		if expression == legacy {
+			return true
+		}
+	}
+	for _, rule := range models.DefaultMenuRules() {
+		if rule.Code == code {
+			return expression == strings.TrimSpace(rule.Expression)
+		}
+	}
+	return false
+}
+
+func setSettingValue(key string, value string) error {
+	return database.DB.Model(&models.Setting{}).
+		Where("`key` = ?", key).
+		Assign(models.Setting{Key: key, Value: value}).
+		FirstOrCreate(&models.Setting{}).Error
 }
 
 func SaveMenuRules(rules []models.MenuRule) ([]models.MenuRule, error) {
+	// Settle the seed migration first so the saved list is the final state
+	// instead of having ListMenuRules resurrect defaults afterwards.
+	if err := EnsureDefaultMenuRules(); err != nil {
+		return nil, err
+	}
 	seen := make(map[string]bool, len(rules))
 	for i := range rules {
 		if err := normalizeAndValidateMenuRule(&rules[i]); err != nil {
@@ -290,6 +377,12 @@ func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, 
 		},
 		"countOverlapMeal": func(field string, values []string) int {
 			return countRuleDishOverlap(meal, field, values)
+		},
+		"countOverlapDay": func(field string, values []string) int {
+			return countRuleDishOverlap(day, field, values)
+		},
+		"countOverlapWeek": func(field string, values []string) int {
+			return countRuleDishOverlap(week, field, values)
 		},
 		"hasOnly": func(values []string, value string) bool {
 			return len(values) == 1 && values[0] == value
