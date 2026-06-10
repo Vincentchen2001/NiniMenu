@@ -88,6 +88,7 @@ type MenuRule struct {
 	Severity    string    `json:"severity" gorm:"default:'hard';index"`
 	Relaxable   bool      `json:"relaxable" gorm:"default:false;index"`
 	Expression  string    `json:"expression" gorm:"not null"`
+	Template    string    `json:"template"`
 	Priority    int       `json:"priority" gorm:"default:0;index"`
 	Message     string    `json:"message"`
 	CreatedAt   time.Time `json:"created_at"`

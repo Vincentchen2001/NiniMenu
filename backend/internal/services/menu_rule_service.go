@@ -35,6 +35,7 @@ type ruleDishEnv struct {
 	Difficulty         string   `expr:"difficulty"`
 	Favorite           bool     `expr:"favorite"`
 	Tags               []string `expr:"tags"`
+	Ingredients        []string `expr:"ingredients"`
 }
 
 type ruleQuotaEnv struct {
@@ -166,6 +167,9 @@ func ValidateMenuRuleExpression(rule models.MenuRule) error {
 }
 
 func normalizeAndValidateMenuRule(rule *models.MenuRule) error {
+	if err := ApplyMenuRuleTemplate(rule); err != nil {
+		return err
+	}
 	rule.Code = strings.TrimSpace(rule.Code)
 	rule.Name = strings.TrimSpace(rule.Name)
 	rule.Scope = normalizeMenuRuleScope(rule.Scope)
@@ -256,6 +260,7 @@ func sampleRuleEnv() map[string]any {
 		Difficulty:         "easy",
 		CookTime:           20,
 		Tags:               []string{"家常菜"},
+		Ingredients:        []string{"鸡蛋"},
 	}
 	return buildRuleEnv(dish, []ruleDishEnv{}, []ruleDishEnv{}, []ruleDishEnv{}, "balanced", MealQuota{MeatCount: 1})
 }
@@ -311,6 +316,7 @@ func dishRuleEnv(dish models.Dish) ruleDishEnv {
 		Difficulty:         dish.Difficulty,
 		Favorite:           dish.Favorite,
 		Tags:               parseTags(dish.Tags),
+		Ingredients:        dishIngredientNames(dish.Ingredients),
 	}
 }
 
