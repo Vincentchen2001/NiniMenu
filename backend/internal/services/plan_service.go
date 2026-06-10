@@ -331,11 +331,11 @@ func pickQuotaDishes(pool []models.Dish, quota MealQuota, dayCtx weekPlanDayCont
 	for _, slot := range weekPlanSlots(quota) {
 		dish, ok, relaxed := pickBestDishForSlot(pool, slot, dayCtx, quota, globalUsed, dayUsed, recent, picked, dayPicked, weekPicked, rules, r)
 		if !ok {
-			*warnings = append(*warnings, fmt.Sprintf("%s%s未补满：%s候选不足或被硬规则限制", dayName, mealLabelForWarning(mealType), slotLabelForWarning(slot)))
+			*warnings = append(*warnings, fmt.Sprintf("%s%s缺一道%s：可选的菜不够或都被规则挡住了，去菜品库加几道吧", dayName, mealLabelForWarning(mealType), slotLabelForWarning(slot)))
 			continue
 		}
 		if relaxed != "" {
-			*warnings = append(*warnings, fmt.Sprintf("%s%s为补足%s已放松%s", dayName, mealLabelForWarning(mealType), slotLabelForWarning(slot), relaxed))
+			*warnings = append(*warnings, relaxationWarning(dayName, mealLabelForWarning(mealType), slotLabelForWarning(slot), relaxed))
 		}
 		picked = append(picked, dish)
 		globalUsed[dish.ID] = true
@@ -557,6 +557,26 @@ func uniqueWarnings(warnings []string) []string {
 		result = append(result, warning)
 	}
 	return result
+}
+
+// relaxationWarning turns a relaxation-stage label into a plain-Chinese
+// explanation of what the planner compromised on to fill the slot.
+func relaxationWarning(dayName string, mealLabel string, slotLabel string, stageLabel string) string {
+	prefix := fmt.Sprintf("%s%s的%s", dayName, mealLabel, slotLabel)
+	switch stageLabel {
+	case "最近避重":
+		return prefix + "不够选，安排了一道最近刚吃过的菜"
+	case "口味画像":
+		return prefix + "没有合当天口味的，放宽了口味要求"
+	case "全周唯一":
+		return prefix + "不够选，和本周其他天重复了一道"
+	case "可降级规则":
+		return prefix + "放宽了部分搭配规则才补上"
+	case "菜品角色":
+		return prefix + "不够，用其他类型的菜顶上了"
+	default:
+		return fmt.Sprintf("%s为补上做了让步（%s）", prefix, stageLabel)
+	}
 }
 
 func mealLabelForWarning(mealType string) string {
