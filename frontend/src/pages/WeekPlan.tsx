@@ -23,7 +23,6 @@ import PageHeader from "@/components/PageHeader"
 import toast from "react-hot-toast"
 import {
   CalendarCheck,
-  ChevronDown,
   ChefHat,
   Download,
   Flame,
@@ -729,6 +728,7 @@ export default function WeekPlan() {
       setDirtyPlan(false)
       qc.setQueryData(["week-plan", "preferences"], nextPrefs)
       qc.setQueryData(["week-plan"], nextPlan)
+      setSettingsOpen(false)
       toast.success("已应用设置")
     },
     onError: () => toast.error("应用设置失败"),
@@ -924,11 +924,11 @@ export default function WeekPlan() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
-              onClick={() => setSettingsOpen((value) => !value)}
+              onClick={() => setSettingsOpen(true)}
               className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-primary-light text-sm font-extrabold text-primary transition-all active:scale-95"
             >
               <Settings2 size={17} strokeWidth={2.4} />
-              {settingsOpen ? "收起设置" : dirtyPrefs ? "设置待应用" : "设置"}
+              {dirtyPrefs ? "设置待应用" : "推荐设置"}
             </button>
             <button
               onClick={() => regenerateMut.mutate()}
@@ -945,89 +945,6 @@ export default function WeekPlan() {
                 <div key={warning} className="text-[11px] font-semibold leading-relaxed text-primary">{warning}</div>
               ))}
               {draftPlan.warnings.length > 3 && <div className="text-[11px] font-semibold text-primary/70">还有 {draftPlan.warnings.length - 3} 条提示</div>}
-            </div>
-          )}
-        </section>
-
-        <section className="mb-4 overflow-hidden rounded-[24px] border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
-          <button
-            onClick={() => setSettingsOpen((value) => !value)}
-            className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-all active:bg-bg/70"
-            aria-expanded={settingsOpen}
-          >
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-primary-light text-primary">
-              <Settings2 size={20} strokeWidth={2.4} />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="text-[15px] font-extrabold text-text">推荐设置</span>
-                {dirtyPrefs && <span className="shrink-0 rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-extrabold text-primary">待应用</span>}
-              </span>
-              <span className="mt-1 block truncate text-[11px] font-medium text-text3">
-                {periodSummary("weekday", draftPrefs.weekday)} / {periodSummary("weekend", draftPrefs.weekend)}
-              </span>
-            </span>
-            <ChevronDown
-              size={18}
-              strokeWidth={2.45}
-              className={`shrink-0 text-text3 transition-transform ${settingsOpen ? "rotate-180" : ""}`}
-            />
-          </button>
-
-          {settingsOpen && (
-            <div className="grid gap-3 border-t border-border bg-bg/45 p-3 animate-fadeUp">
-              <div className="min-w-0 rounded-2xl border border-border bg-card p-3">
-                <div className="mb-1 text-[13px] font-extrabold text-text">本周想多吃</div>
-                <div className="mb-2 text-[11px] font-medium text-text3">选中的食材整周都会优先安排</div>
-                <div className="flex flex-wrap gap-2">
-                  {PROTEIN_OPTIONS.map((option) => {
-                    const active = (draftPrefs.week_want || []).includes(option.key)
-                    return (
-                      <button
-                        key={option.key}
-                        onClick={() => toggleWeekWant(option.key)}
-                        className={`rounded-full border px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95 ${
-                          active ? "border-primary bg-primary text-white" : "border-border bg-bg text-text2"
-                        }`}
-                      >
-                        {option.label}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-              <div className="min-w-0 rounded-2xl border border-border bg-card p-3">
-                <div className="mb-2 text-[13px] font-extrabold text-text">每天吃几道（快捷填入）</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {MEAL_COUNT_PRESETS.map((preset) => (
-                    <button
-                      key={preset.key}
-                      onClick={() => applyMealCountPreset(preset)}
-                      className="min-w-0 rounded-2xl border border-border bg-bg px-2 py-2 text-center transition-all hover:border-primary/40 active:scale-95"
-                    >
-                      <span className="block truncate text-[12px] font-extrabold text-text">{preset.label}</span>
-                      <span className="mt-0.5 block truncate text-[10px] font-medium leading-tight text-text3" title={preset.desc}>{preset.desc}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {(["weekday", "weekend"] as PeriodKey[]).map((period) => (
-                <PreferenceCard
-                  key={period}
-                  period={period}
-                  value={draftPrefs[period]}
-                  onProfileChange={(profile) => updateProfile(period, profile)}
-                  onQuotaChange={(meal, kind, next) => updateQuota(period, meal, kind, next)}
-                />
-              ))}
-              <button
-                onClick={() => applyPrefsMut.mutate()}
-                disabled={busy || !dirtyPrefs}
-                className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-extrabold text-white transition-all active:scale-95 disabled:opacity-45"
-              >
-                <Settings2 size={17} strokeWidth={2.4} />
-                应用设置
-              </button>
             </div>
           )}
         </section>
@@ -1095,6 +1012,100 @@ export default function WeekPlan() {
           onAdd={(dish) => addDish(picker.date, picker.meal, dish)}
           onClose={() => setPicker(null)}
         />
+      )}
+
+      {settingsOpen && createPortal(
+        <div className="fixed inset-0 z-[220] flex items-end justify-center sm:items-center sm:p-6" onClick={() => setSettingsOpen(false)}>
+          <div className="absolute inset-0 bg-black/42" />
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="relative flex max-h-[86vh] w-full max-w-[640px] flex-col overflow-hidden rounded-t-[28px] bg-card shadow-[0_-8px_30px_rgba(0,0,0,.16)] animate-fadeUp sm:max-h-[84vh] sm:max-w-[560px] sm:rounded-[28px] sm:shadow-[0_24px_60px_rgba(0,0,0,.22)]"
+          >
+            <div className="shrink-0 px-5 pt-3">
+              <div className="mx-auto mb-4 h-1 w-11 rounded-full bg-border2 sm:hidden" />
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-lg font-extrabold">推荐设置</span>
+                    {dirtyPrefs && <span className="shrink-0 rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-extrabold text-primary">待应用</span>}
+                  </div>
+                  <div className="mt-0.5 truncate text-[12px] font-medium text-text3">
+                    {periodSummary("weekday", draftPrefs.weekday)} / {periodSummary("weekend", draftPrefs.weekend)}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSettingsOpen(false)}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bg text-text3 transition-all hover:text-primary active:scale-95"
+                  aria-label="关闭"
+                  title="关闭"
+                >
+                  <X size={18} strokeWidth={2.35} />
+                </button>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto border-t border-border bg-bg/45 p-3">
+              <div className="grid gap-3">
+                <div className="min-w-0 rounded-2xl border border-border bg-card p-3">
+                  <div className="mb-1 text-[13px] font-extrabold text-text">本周想多吃</div>
+                  <div className="mb-2 text-[11px] font-medium text-text3">选中的食材整周都会优先安排</div>
+                  <div className="flex flex-wrap gap-2">
+                    {PROTEIN_OPTIONS.map((option) => {
+                      const active = (draftPrefs.week_want || []).includes(option.key)
+                      return (
+                        <button
+                          key={option.key}
+                          onClick={() => toggleWeekWant(option.key)}
+                          className={`rounded-full border px-3.5 py-1.5 text-[12px] font-bold transition-all active:scale-95 ${
+                            active ? "border-primary bg-primary text-white" : "border-border bg-bg text-text2"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="min-w-0 rounded-2xl border border-border bg-card p-3">
+                  <div className="mb-2 text-[13px] font-extrabold text-text">每天吃几道（快捷填入）</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    {MEAL_COUNT_PRESETS.map((preset) => (
+                      <button
+                        key={preset.key}
+                        onClick={() => applyMealCountPreset(preset)}
+                        className="min-w-0 rounded-2xl border border-border bg-bg px-2 py-2 text-center transition-all hover:border-primary/40 active:scale-95"
+                      >
+                        <span className="block truncate text-[12px] font-extrabold text-text">{preset.label}</span>
+                        <span className="mt-0.5 block truncate text-[10px] font-medium leading-tight text-text3" title={preset.desc}>{preset.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {(["weekday", "weekend"] as PeriodKey[]).map((period) => (
+                  <PreferenceCard
+                    key={period}
+                    period={period}
+                    value={draftPrefs[period]}
+                    onProfileChange={(profile) => updateProfile(period, profile)}
+                    onQuotaChange={(meal, kind, next) => updateQuota(period, meal, kind, next)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div className="shrink-0 border-t border-border bg-card p-3">
+              <button
+                onClick={() => applyPrefsMut.mutate()}
+                disabled={busy || !dirtyPrefs}
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-extrabold text-white transition-all active:scale-95 disabled:opacity-45"
+              >
+                <Settings2 size={17} strokeWidth={2.4} className={applyPrefsMut.isPending ? "animate-spin" : ""} />
+                {applyPrefsMut.isPending ? "应用中…" : "应用设置并重新生成"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
 
       {themeSheet && (
