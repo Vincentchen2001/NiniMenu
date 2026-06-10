@@ -516,7 +516,7 @@ function DishPickerModal({
   const meta = mealMeta[meal]
   const { data, isLoading } = useQuery({
     queryKey: ["dishes", "week-plan-picker", meal],
-    queryFn: () => dishesApi.list({ enabled: "true", meal_type: meal, pageSize: "100", sort: "sort_order", order: "asc" }),
+    queryFn: () => dishesApi.list({ enabled: "true", meal_type: meal, pageSize: "0", sort: "sort_order", order: "asc" }),
   })
 
   const candidates = useMemo(() => (data?.items || []).filter((dish) => matchesMeal(dish, meal)), [data, meal])
@@ -573,7 +573,7 @@ function DishPickerModal({
             />
           </label>
 
-          <div className="flex gap-2 overflow-x-auto pb-3 scrollbar-none">
+          <div className="flex flex-wrap gap-2 pb-3">
             {categories.map((item) => (
               <button
                 key={item}

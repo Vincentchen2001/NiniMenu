@@ -137,7 +137,7 @@ export default function DishDetail() {
 
   const { data: dishesData } = useQuery({
     queryKey: ["dishes", "all"],
-    queryFn: () => dishesApi.list({ pageSize: "100" }),
+    queryFn: () => dishesApi.list({ pageSize: "0" }),
   })
   const allDishes = useMemo(() => dishesData?.items ?? [], [dishesData?.items])
   const sameCategoryDishes = useMemo(() => allDishes.filter((d: Dish) => d.category === dish?.category && d.id !== dishId).slice(0, 6), [allDishes, dish?.category, dishId])

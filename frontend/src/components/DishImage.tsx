@@ -34,7 +34,7 @@ export default function DishImage({ dish, className, imgClassName, emojiSize = "
   if (url) {
     return (
       <div className={className}>
-        <img src={url} alt={dish.name} className={`w-full h-full object-cover ${imgClassName || ""}`} />
+        <img src={url} alt={dish.name} loading="lazy" className={`w-full h-full object-cover ${imgClassName || ""}`} />
       </div>
     )
   }
