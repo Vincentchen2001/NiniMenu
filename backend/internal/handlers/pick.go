@@ -68,6 +68,7 @@ func PickMood(c *gin.Context) {
 	case "tired", "lazy":
 		var dishes []models.Dish
 		database.DB.Where("enabled = ? AND difficulty = ?", true, "easy").Find(&dishes)
+		dishes = services.FilterBlockedDishes(dishes)
 		if len(dishes) > 0 {
 			shuffled := shuffleDishes(dishes)
 			if len(shuffled) > count {
@@ -81,6 +82,7 @@ func PickMood(c *gin.Context) {
 	case "spicy":
 		var dishes []models.Dish
 		database.DB.Where("enabled = ? AND taste = ?", true, "辣").Find(&dishes)
+		dishes = services.FilterBlockedDishes(dishes)
 		if len(dishes) > 0 {
 			shuffled := shuffleDishes(dishes)
 			if len(shuffled) > count {
@@ -94,6 +96,7 @@ func PickMood(c *gin.Context) {
 	case "healthy":
 		var dishes []models.Dish
 		database.DB.Where("enabled = ? AND taste IN ?", true, []string{"清淡", "鲜"}).Find(&dishes)
+		dishes = services.FilterBlockedDishes(dishes)
 		if len(dishes) > 0 {
 			shuffled := shuffleDishes(dishes)
 			if len(shuffled) > count {
@@ -144,6 +147,7 @@ func PickTomorrow(c *gin.Context) {
 func PickBlindBox(c *gin.Context) {
 	var dishes []models.Dish
 	database.DB.Where("enabled = ?", true).Find(&dishes)
+	dishes = services.FilterBlockedDishes(dishes)
 	if len(dishes) == 0 {
 		utils.NotFound(c, "没有可推荐的菜品")
 		return
