@@ -507,6 +507,34 @@ func TestEnsureDefaultMenuRulesKeepsUserModifiedRules(t *testing.T) {
 	}
 }
 
+func TestMenuRuleTemplateSoupSchedulingCategories(t *testing.T) {
+	limitTpl := MenuRuleTemplate{Type: "limit", Scope: "week", Category: "slow_soup", N: 2, Points: 25, Strength: "prefer"}
+	rendered, err := limitTpl.render()
+	if err != nil {
+		t.Fatalf("render(slow_soup limit) error = %v", err)
+	}
+	wantLimit := `candidate.dish_role == "soup" && candidate.cook_time > 45 && len(filter(week, .dish_role == "soup" && .cook_time > 45)) >= 2 ? -25 : 0`
+	if rendered.Expression != wantLimit {
+		t.Errorf("slow_soup limit expression:\ngot:  %s\nwant: %s", rendered.Expression, wantLimit)
+	}
+	if rendered.RuleKind != "score" || rendered.Severity != "soft" || !rendered.Relaxable || rendered.Scope != "week" {
+		t.Errorf("slow_soup limit meta = %+v", rendered)
+	}
+
+	avoidTpl := MenuRuleTemplate{Type: "avoid", Category: "soup_ingredient_repeat", Points: 18, Strength: "prefer"}
+	rendered, err = avoidTpl.render()
+	if err != nil {
+		t.Fatalf("render(soup_ingredient_repeat avoid) error = %v", err)
+	}
+	wantAvoid := `candidate.dish_role == "soup" && countOverlapPrevSoup("ingredients", candidate.ingredients) > 0 ? -18 : 0`
+	if rendered.Expression != wantAvoid {
+		t.Errorf("soup_ingredient_repeat expression:\ngot:  %s\nwant: %s", rendered.Expression, wantAvoid)
+	}
+	if rendered.RuleKind != "score" || rendered.Severity != "soft" || !rendered.Relaxable || rendered.Scope != "candidate" {
+		t.Errorf("soup_ingredient_repeat meta = %+v", rendered)
+	}
+}
+
 func TestCountOverlapPrevSoupHelper(t *testing.T) {
 	prevSoups := []ruleDishEnv{{
 		Name: "萝卜丝鲫鱼汤", DishRole: "soup",

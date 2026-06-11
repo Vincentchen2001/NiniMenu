@@ -200,6 +200,10 @@ func menuRuleCategoryPredicate(category string) (string, error) {
 		return `candidate.category != "" && candidate.category_favorites == 0`, nil
 	case category == "weekday_slow_soup":
 		return `!is_weekend && candidate.dish_role == "soup" && (candidate.cook_time > 45 || candidate.difficulty == "hard")`, nil
+	case category == "slow_soup":
+		return `candidate.dish_role == "soup" && candidate.cook_time > 45`, nil
+	case category == "soup_ingredient_repeat":
+		return `candidate.dish_role == "soup" && countOverlapPrevSoup("ingredients", candidate.ingredients) > 0`, nil
 	case strings.HasPrefix(category, "protein:"):
 		key, err := templateProteinKey(category)
 		if err != nil {
@@ -236,6 +240,8 @@ func menuRuleCategoryCount(category string, scope string) (string, error) {
 		return fmt.Sprintf(`count%s("cooking_methods", "deep_fry")`, suffix), nil
 	case category == "slow":
 		return fmt.Sprintf(`len(filter(%s, .cook_time > 45))`, scope), nil
+	case category == "slow_soup":
+		return fmt.Sprintf(`len(filter(%s, .dish_role == "soup" && .cook_time > 45))`, scope), nil
 	case strings.HasPrefix(category, "protein:"):
 		key, err := templateProteinKey(category)
 		if err != nil {
