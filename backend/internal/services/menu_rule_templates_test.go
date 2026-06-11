@@ -265,8 +265,8 @@ func TestMenuRuleTemplateNewCategoryPredicates(t *testing.T) {
 
 func TestDefaultMenuRuleTemplatesMatchExpressions(t *testing.T) {
 	defaults := models.DefaultMenuRules()
-	if len(defaults) != 12 {
-		t.Fatalf("DefaultMenuRules() has %d rules, want 12", len(defaults))
+	if len(defaults) != 14 {
+		t.Fatalf("DefaultMenuRules() has %d rules, want 14", len(defaults))
 	}
 	for _, rule := range defaults {
 		if rule.Template == "" {
@@ -342,6 +342,7 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 		"spicy_meal_spread", "slow_meal_spread",
 		"weekly_protein_variety", "weekly_fried_limit",
 		"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty",
+		"weekly_slow_soup_limit", "soup_ingredient_repeat_penalty",
 	}
 	if len(rules) != len(wantCodes) {
 		t.Errorf("after migration %d rules, want %d (%v)", len(rules), len(wantCodes), got)
@@ -366,8 +367,8 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
 		t.Fatalf("seed version setting missing: %v", err)
 	}
-	if setting.Value != "3" {
-		t.Errorf("seed version = %q, want 3", setting.Value)
+	if setting.Value != "4" {
+		t.Errorf("seed version = %q, want 4", setting.Value)
 	}
 
 	if err := EnsureDefaultMenuRules(); err != nil {
@@ -380,7 +381,7 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 	}
 }
 
-func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
+func TestEnsureDefaultMenuRulesMigratesV2ToCurrent(t *testing.T) {
 	setupPlanServiceTestDB(t)
 
 	// Seed a v2-era database: the 9 v2 factory rules, one user-modified and
@@ -389,8 +390,9 @@ func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
 	for _, rule := range models.DefaultMenuRules() {
 		rule := rule
 		switch rule.Code {
-		case "non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty":
-			continue // v3 additions don't exist in a v2 database
+		case "non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty",
+			"weekly_slow_soup_limit", "soup_ingredient_repeat_penalty":
+			continue // v3/v4 additions don't exist in a v2 database
 		}
 		if rule.Code == "weekly_fried_limit" {
 			rule.Expression = `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
@@ -422,10 +424,10 @@ func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
 		t.Fatalf("load rules: %v", err)
 	}
 	got := menuRuleCodeSet(rules)
-	if len(rules) != 12 {
-		t.Fatalf("after v3 migration %d rules, want 12 (%v)", len(rules), got)
+	if len(rules) != 14 {
+		t.Fatalf("after migration %d rules, want 14 (%v)", len(rules), got)
 	}
-	for _, code := range []string{"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty"} {
+	for _, code := range []string{"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty", "weekly_slow_soup_limit", "soup_ingredient_repeat_penalty"} {
 		if _, ok := got[code]; !ok {
 			t.Errorf("missing v3 rule %s after migration", code)
 		}
@@ -458,8 +460,8 @@ func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
 	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
 		t.Fatalf("seed version setting missing: %v", err)
 	}
-	if setting.Value != "3" {
-		t.Errorf("seed version = %q, want 3", setting.Value)
+	if setting.Value != "4" {
+		t.Errorf("seed version = %q, want 4", setting.Value)
 	}
 }
 
@@ -562,5 +564,67 @@ func TestCountOverlapPrevSoupHelper(t *testing.T) {
 	emptyFn := emptyEnv["countOverlapPrevSoup"].(func(string, []string) int)
 	if got := emptyFn("ingredients", candidate.Ingredients); got != 0 {
 		t.Fatalf("countOverlapPrevSoup(no prev soups) = %d, want 0", got)
+	}
+}
+
+func TestEnsureDefaultMenuRulesMigratesV3ToV4(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	// Seed a v3-era database: all current defaults except the two v4
+	// additions, with one user-modified rule and one rule toggled off.
+	for _, rule := range models.DefaultMenuRules() {
+		rule := rule
+		switch rule.Code {
+		case "weekly_slow_soup_limit", "soup_ingredient_repeat_penalty":
+			continue // v4 additions don't exist in a v3 database
+		}
+		if rule.Code == "weekly_fried_limit" {
+			rule.Expression = `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
+			rule.Template = ""
+		}
+		if err := database.DB.Create(&rule).Error; err != nil {
+			t.Fatalf("seed v3 rule %s: %v", rule.Code, err)
+		}
+	}
+	// Toggle a factory rule off the way the rules page does (column update);
+	// Create alone would lose Enabled=false to the gorm default.
+	if err := database.DB.Model(&models.MenuRule{}).Where("code = ?", "weekday_slow_soup_penalty").Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable weekday_slow_soup_penalty: %v", err)
+	}
+	if err := setSettingValue("menu_rules_seed_version", "3"); err != nil {
+		t.Fatalf("set seed version: %v", err)
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("EnsureDefaultMenuRules() error = %v", err)
+	}
+
+	var rules []models.MenuRule
+	if err := database.DB.Find(&rules).Error; err != nil {
+		t.Fatalf("load rules: %v", err)
+	}
+	got := menuRuleCodeSet(rules)
+	if len(rules) != 14 {
+		t.Fatalf("after v4 migration %d rules, want 14 (%v)", len(rules), got)
+	}
+	for _, code := range []string{"weekly_slow_soup_limit", "soup_ingredient_repeat_penalty"} {
+		if _, ok := got[code]; !ok {
+			t.Errorf("missing v4 rule %s after migration", code)
+		}
+	}
+	wantModified := `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
+	if got["weekly_fried_limit"].Expression != wantModified {
+		t.Errorf("user-modified rule overwritten:\ngot:  %s\nwant: %s", got["weekly_fried_limit"].Expression, wantModified)
+	}
+	if got["weekday_slow_soup_penalty"].Enabled {
+		t.Errorf("user-disabled weekday_slow_soup_penalty was re-enabled by migration")
+	}
+
+	var setting models.Setting
+	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
+		t.Fatalf("seed version setting missing: %v", err)
+	}
+	if setting.Value != "4" {
+		t.Errorf("seed version = %q, want 4", setting.Value)
 	}
 }

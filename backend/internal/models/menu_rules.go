@@ -1,6 +1,6 @@
 package models
 
-// DefaultMenuRules is the factory rule set (seed version 3). Every rule
+// DefaultMenuRules is the factory rule set (seed version 4). Every rule
 // carries a sentence template; the Expression strings below are exactly what
 // the template renderer produces — a test asserts they never drift.
 func DefaultMenuRules() []MenuRule {
@@ -174,6 +174,34 @@ func DefaultMenuRules() []MenuRule {
 			Template:    `{"type":"avoid","scope":"meal","category":"weekday_slow_soup","n":1,"points":30,"strength":"prefer"}`,
 			Priority:    280,
 			Message:     "工作日费时汤降分",
+		},
+		{
+			Code:        "weekly_slow_soup_limit",
+			Name:        "费时汤一周最多两道",
+			Description: "一周菜单里炖煮超过 45 分钟的汤已有两道后，再排第三道会降分；大炖汤留给周末两天刚刚好。",
+			Enabled:     true,
+			Scope:       "week",
+			RuleKind:    "score",
+			Severity:    "soft",
+			Relaxable:   true,
+			Expression:  `candidate.dish_role == "soup" && candidate.cook_time > 45 && len(filter(week, .dish_role == "soup" && .cook_time > 45)) >= 2 ? -25 : 0`,
+			Template:    `{"type":"limit","scope":"week","category":"slow_soup","n":2,"points":25,"strength":"prefer"}`,
+			Priority:    290,
+			Message:     "一周费时汤过多降分",
+		},
+		{
+			Code:        "soup_ingredient_repeat_penalty",
+			Name:        "今天的汤不和昨天撞主料",
+			Description: "排今天的汤位时，候选汤和昨天的汤主料重叠（比如都是鲫鱼）会降分；葱姜蒜等基础配料不算主料。",
+			Enabled:     true,
+			Scope:       "candidate",
+			RuleKind:    "score",
+			Severity:    "soft",
+			Relaxable:   true,
+			Expression:  `candidate.dish_role == "soup" && countOverlapPrevSoup("ingredients", candidate.ingredients) > 0 ? -18 : 0`,
+			Template:    `{"type":"avoid","scope":"meal","category":"soup_ingredient_repeat","n":1,"points":18,"strength":"prefer"}`,
+			Priority:    300,
+			Message:     "汤主料与昨天重复降分",
 		},
 	}
 }
