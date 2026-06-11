@@ -194,6 +194,12 @@ func menuRuleCategoryPredicate(category string) (string, error) {
 		return `has(candidate.cooking_methods, "deep_fry")`, nil
 	case category == "slow":
 		return `candidate.cook_time > 45`, nil
+	case category == "non_favorite":
+		return `!candidate.favorite`, nil
+	case category == "unfamiliar_category":
+		return `candidate.category != "" && candidate.category_favorites == 0`, nil
+	case category == "weekday_slow_soup":
+		return `!is_weekend && candidate.dish_role == "soup" && (candidate.cook_time > 45 || candidate.difficulty == "hard")`, nil
 	case strings.HasPrefix(category, "protein:"):
 		key, err := templateProteinKey(category)
 		if err != nil {

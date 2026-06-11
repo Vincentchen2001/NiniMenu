@@ -1,6 +1,6 @@
 package models
 
-// DefaultMenuRules is the factory rule set (seed version 2). Every rule
+// DefaultMenuRules is the factory rule set (seed version 3). Every rule
 // carries a sentence template; the Expression strings below are exactly what
 // the template renderer produces — a test asserts they never drift.
 func DefaultMenuRules() []MenuRule {
@@ -130,6 +130,48 @@ func DefaultMenuRules() []MenuRule {
 			Template:    `{"type":"limit","scope":"week","category":"deep_fry","n":2,"points":20,"strength":"prefer"}`,
 			Priority:    250,
 			Message:     "一周油炸过多降分",
+		},
+		{
+			Code:        "non_favorite_penalty",
+			Name:        "未收藏的菜降分",
+			Description: "收藏过的菜代表家里会做；没收藏的菜推荐时降一点分，但不会完全消失。",
+			Enabled:     true,
+			Scope:       "candidate",
+			RuleKind:    "score",
+			Severity:    "soft",
+			Relaxable:   true,
+			Expression:  `!candidate.favorite ? -12 : 0`,
+			Template:    `{"type":"avoid","scope":"meal","category":"non_favorite","n":1,"points":12,"strength":"prefer"}`,
+			Priority:    260,
+			Message:     "未收藏的菜降分",
+		},
+		{
+			Code:        "unfamiliar_category_penalty",
+			Name:        "陌生菜系降分",
+			Description: "一道收藏都没有的菜系视为基本不会做，整体大幅降分；偶尔出现就当学新菜的机会。",
+			Enabled:     true,
+			Scope:       "candidate",
+			RuleKind:    "score",
+			Severity:    "soft",
+			Relaxable:   true,
+			Expression:  `candidate.category != "" && candidate.category_favorites == 0 ? -25 : 0`,
+			Template:    `{"type":"avoid","scope":"meal","category":"unfamiliar_category","n":1,"points":25,"strength":"prefer"}`,
+			Priority:    270,
+			Message:     "陌生菜系降分",
+		},
+		{
+			Code:        "weekday_slow_soup_penalty",
+			Name:        "工作日少排费时汤",
+			Description: "周一到周五的汤位优先快手汤；炖煮超过 45 分钟或难度高的汤留给周末。",
+			Enabled:     true,
+			Scope:       "candidate",
+			RuleKind:    "score",
+			Severity:    "soft",
+			Relaxable:   true,
+			Expression:  `!is_weekend && candidate.dish_role == "soup" && (candidate.cook_time > 45 || candidate.difficulty == "hard") ? -30 : 0`,
+			Template:    `{"type":"avoid","scope":"meal","category":"weekday_slow_soup","n":1,"points":30,"strength":"prefer"}`,
+			Priority:    280,
+			Message:     "工作日费时汤降分",
 		},
 	}
 }

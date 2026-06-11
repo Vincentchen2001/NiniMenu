@@ -1231,6 +1231,32 @@ func TestRuleEnvCategoryFavoritesAndWeekend(t *testing.T) {
 	}
 }
 
+func TestV3DefaultRulesScoreBehavior(t *testing.T) {
+	compiled, warnings := compileMenuRules(models.DefaultMenuRules())
+	if len(warnings) != 0 {
+		t.Fatalf("default rules compile warnings: %v", warnings)
+	}
+
+	slowSoup := models.Dish{Name: "莲藕排骨汤", Category: "汤品", CookTime: 90, Difficulty: "medium", DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	favs := map[string]int{"家常菜": 3}
+	weekday := weekPlanDayContext{profile: "balanced", categoryFavorites: favs}
+	weekend := weekPlanDayContext{profile: "balanced", isWeekend: true, categoryFavorites: favs}
+
+	wd := evaluateScoreRules(slowSoup, weekday, MealQuota{SoupCount: 1}, nil, nil, nil, compiled, true)
+	we := evaluateScoreRules(slowSoup, weekend, MealQuota{SoupCount: 1}, nil, nil, nil, compiled, true)
+	if wd-we != -30 {
+		t.Fatalf("weekday slow-soup delta = %v, want -30", wd-we)
+	}
+
+	favored := slowSoup
+	favored.Favorite = true
+	favored.Category = "家常菜"
+	wdFav := evaluateScoreRules(favored, weekday, MealQuota{SoupCount: 1}, nil, nil, nil, compiled, true)
+	if wdFav-wd != 37 {
+		t.Fatalf("favorite escape delta = %v, want +37 (-12 and -25 both lifted)", wdFav-wd)
+	}
+}
+
 func TestFavoriteCategoryCounts(t *testing.T) {
 	setupPlanServiceTestDB(t)
 	seed := []models.Dish{

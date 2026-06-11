@@ -237,10 +237,36 @@ func TestCountOverlapDayAndWeekHelpers(t *testing.T) {
 	}
 }
 
+func TestMenuRuleTemplateNewCategoryPredicates(t *testing.T) {
+	cases := []struct {
+		category string
+		points   int
+		want     string
+	}{
+		{"non_favorite", 12, `!candidate.favorite ? -12 : 0`},
+		{"unfamiliar_category", 25, `candidate.category != "" && candidate.category_favorites == 0 ? -25 : 0`},
+		{"weekday_slow_soup", 30, `!is_weekend && candidate.dish_role == "soup" && (candidate.cook_time > 45 || candidate.difficulty == "hard") ? -30 : 0`},
+	}
+	for _, tc := range cases {
+		tpl := MenuRuleTemplate{Type: "avoid", Category: tc.category, Points: tc.points, Strength: "prefer"}
+		rendered, err := tpl.render()
+		if err != nil {
+			t.Errorf("render(%s) error = %v", tc.category, err)
+			continue
+		}
+		if rendered.Expression != tc.want {
+			t.Errorf("render(%s) expression:\ngot:  %s\nwant: %s", tc.category, rendered.Expression, tc.want)
+		}
+		if rendered.RuleKind != "score" || rendered.Severity != "soft" || !rendered.Relaxable || rendered.Scope != "candidate" {
+			t.Errorf("render(%s) meta = %+v", tc.category, rendered)
+		}
+	}
+}
+
 func TestDefaultMenuRuleTemplatesMatchExpressions(t *testing.T) {
 	defaults := models.DefaultMenuRules()
-	if len(defaults) != 9 {
-		t.Fatalf("DefaultMenuRules() has %d rules, want 9", len(defaults))
+	if len(defaults) != 12 {
+		t.Fatalf("DefaultMenuRules() has %d rules, want 12", len(defaults))
 	}
 	for _, rule := range defaults {
 		if rule.Template == "" {
@@ -315,6 +341,7 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 		"avoid_same_primary_protein", "avoid_heavy_spicy_day",
 		"spicy_meal_spread", "slow_meal_spread",
 		"weekly_protein_variety", "weekly_fried_limit",
+		"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty",
 	}
 	if len(rules) != len(wantCodes) {
 		t.Errorf("after migration %d rules, want %d (%v)", len(rules), len(wantCodes), got)
@@ -339,8 +366,8 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
 		t.Fatalf("seed version setting missing: %v", err)
 	}
-	if setting.Value != "2" {
-		t.Errorf("seed version = %q, want 2", setting.Value)
+	if setting.Value != "3" {
+		t.Errorf("seed version = %q, want 3", setting.Value)
 	}
 
 	if err := EnsureDefaultMenuRules(); err != nil {
@@ -350,6 +377,58 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 	database.DB.Model(&models.MenuRule{}).Count(&countAfter)
 	if countAfter != int64(len(wantCodes)) {
 		t.Errorf("second ensure changed rule count to %d", countAfter)
+	}
+}
+
+func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	// Seed a v2-era database: the 9 v2 factory rules, one user-modified.
+	for _, rule := range models.DefaultMenuRules() {
+		rule := rule
+		switch rule.Code {
+		case "non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty":
+			continue // v3 additions don't exist in a v2 database
+		}
+		if rule.Code == "weekly_fried_limit" {
+			rule.Expression = `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
+			rule.Template = ""
+		}
+		if err := database.DB.Create(&rule).Error; err != nil {
+			t.Fatalf("seed v2 rule %s: %v", rule.Code, err)
+		}
+	}
+	if err := setSettingValue("menu_rules_seed_version", "2"); err != nil {
+		t.Fatalf("set seed version: %v", err)
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("EnsureDefaultMenuRules() error = %v", err)
+	}
+
+	var rules []models.MenuRule
+	if err := database.DB.Find(&rules).Error; err != nil {
+		t.Fatalf("load rules: %v", err)
+	}
+	got := menuRuleCodeSet(rules)
+	if len(rules) != 12 {
+		t.Fatalf("after v3 migration %d rules, want 12 (%v)", len(rules), got)
+	}
+	for _, code := range []string{"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty"} {
+		if _, ok := got[code]; !ok {
+			t.Errorf("missing v3 rule %s after migration", code)
+		}
+	}
+	wantModified := `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
+	if got["weekly_fried_limit"].Expression != wantModified {
+		t.Errorf("user-modified rule overwritten:\ngot:  %s\nwant: %s", got["weekly_fried_limit"].Expression, wantModified)
+	}
+	var setting models.Setting
+	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
+		t.Fatalf("seed version setting missing: %v", err)
+	}
+	if setting.Value != "3" {
+		t.Errorf("seed version = %q, want 3", setting.Value)
 	}
 }
 

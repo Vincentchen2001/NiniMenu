@@ -68,7 +68,7 @@ func ListMenuRules() ([]models.MenuRule, error) {
 
 const (
 	menuRulesSeedVersionKey = "menu_rules_seed_version"
-	menuRulesSeedVersion    = 2
+	menuRulesSeedVersion    = 3
 )
 
 // droppedMenuRuleExpressions lists pre-v2 default rules that no longer ship.
@@ -100,7 +100,7 @@ func EnsureDefaultMenuRules() error {
 		return nil
 	}
 	if getSettingInt(menuRulesSeedVersionKey, 0) < menuRulesSeedVersion {
-		if err := migrateMenuRulesToV2(); err != nil {
+		if err := syncDefaultMenuRules(); err != nil {
 			return err
 		}
 		return setSettingValue(menuRulesSeedVersionKey, strconv.Itoa(menuRulesSeedVersion))
@@ -127,7 +127,12 @@ func EnsureDefaultMenuRules() error {
 	return nil
 }
 
-func migrateMenuRulesToV2() error {
+// syncDefaultMenuRules reconciles the rule table with the current factory
+// set: dropped v1 rules still at their factory expression are deleted,
+// missing default codes are inserted, and rows whose expression still
+// matches a factory variant are refreshed to the current definition.
+// User-modified rules are never touched.
+func syncDefaultMenuRules() error {
 	for code, factoryExpression := range droppedMenuRuleExpressions {
 		var existing models.MenuRule
 		err := database.DB.Where("code = ?", code).First(&existing).Error
