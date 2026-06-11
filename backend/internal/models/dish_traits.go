@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const DishTraitVersion = 1
+const DishTraitVersion = 2
 
 func InferDishTraits(dish Dish) Dish {
 	text := dishTraitText(dish)
@@ -15,7 +15,7 @@ func InferDishTraits(dish Dish) Dish {
 
 	proteins := inferProteinSources(text + " " + ingredientText)
 	methods := inferCookingMethods(text)
-	role := inferDishRole(text, tags, proteins)
+	role := inferDishRole(dish.Name, dish.Category, text, tags, proteins)
 	temperature := inferServingTemperature(text, methods)
 
 	dish.DishRole = role
@@ -134,8 +134,19 @@ func inferProteinSources(text string) []string {
 	return uniqueNonEmptyStrings(result)
 }
 
-func inferDishRole(text string, tags []string, proteins []string) string {
-	if containsAnyDishTrait(text, "汤品", "蛋花汤", "例汤", "羹", "煲", "汤") {
+// IsSoupName reports whether a dish is a soup in the meal-slot sense (a
+// drinkable accompaniment). Only the category and the name SUFFIX count:
+// mid-name 汤 (酸汤鱼, 上汤娃娃菜, 汤圆), tags, remark, ingredient and step
+// texts deliberately do not — those describe form or technique, not the
+// dish's role on the table.
+func IsSoupName(name, category string) bool {
+	return strings.Contains(category, "汤") ||
+		strings.HasSuffix(name, "汤") ||
+		strings.HasSuffix(name, "羹")
+}
+
+func inferDishRole(name string, category string, text string, tags []string, proteins []string) string {
+	if IsSoupName(name, category) {
 		return "soup"
 	}
 	if containsAnyDishTrait(text, "主食", "米饭", "炒饭", "盖饭", "面条", "米线", "米粉", "冷面", "饺子", "馄饨", "馒头", "饼", "粥", "粉丝", "河粉") {
