@@ -41,6 +41,15 @@ const FIXED_CATEGORY_LABELS: Record<string, string> = {
   slow: "费时菜（超过45分钟）",
 }
 
+// Display-only categories used by the v3 preset rules. Not offered in the
+// sentence builder: they have no count expression, so a limit-type rule
+// built from them would fail backend validation.
+const DISPLAY_ONLY_CATEGORY_LABELS: Record<string, string> = {
+  non_favorite: "没收藏的菜",
+  unfamiliar_category: "一道收藏都没有的菜系",
+  weekday_slow_soup: "工作日的费时汤",
+}
+
 export const CATEGORY_OPTIONS: Array<{ key: string; label: string }> = [
   ...Object.entries(FIXED_CATEGORY_LABELS).map(([key, label]) => ({ key, label })),
   ...PROTEIN_OPTIONS.map((option) => ({ key: `protein:${option.key}`, label: `${option.label}菜` })),
@@ -56,7 +65,7 @@ export function categoryLabel(category?: string): string {
   if (category.startsWith("ingredient:")) {
     return `带「${category.slice("ingredient:".length)}」的菜`
   }
-  return FIXED_CATEGORY_LABELS[category] || category
+  return FIXED_CATEGORY_LABELS[category] || DISPLAY_ONLY_CATEGORY_LABELS[category] || category
 }
 
 const SCOPE_LABELS: Record<string, string> = { meal: "同一餐", day: "同一天", week: "一周" }
