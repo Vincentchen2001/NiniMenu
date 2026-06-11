@@ -401,6 +401,9 @@ func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, 
 		"countOverlapWeek": func(field string, values []string) int {
 			return countRuleDishOverlap(week, field, values)
 		},
+		// Filtering the candidate side alone is complete: ruleDishFieldMatches
+		// uses exact equality, so an unfiltered aromatic in prevSoups can never
+		// match a candidate value that the filter removed.
 		"countOverlapPrevSoup": func(field string, values []string) int {
 			return countRuleDishOverlap(prevSoups, field, filterSoupAromatics(values))
 		},
