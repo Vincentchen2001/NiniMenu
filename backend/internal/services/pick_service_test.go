@@ -73,6 +73,10 @@ func TestPickPenaltyAdjustment(t *testing.T) {
 	if got := pickPenaltyAdjustment(quickSoup, favs, false); got != -12 {
 		t.Errorf("weekday quick soup = %d, want -12 (no slow penalty)", got)
 	}
+	hardSoup := models.Dish{Name: "佛跳墙", Category: "家常菜", DishRole: "soup", CookTime: 30, Difficulty: "hard"}
+	if got := pickPenaltyAdjustment(hardSoup, favs, false); got != -42 {
+		t.Errorf("weekday hard soup = %d, want -42 (-12 -30 via difficulty)", got)
+	}
 }
 
 func TestSortTomorrowPoolPrefersFavorites(t *testing.T) {

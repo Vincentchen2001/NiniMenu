@@ -355,7 +355,7 @@ export default function AdminSettings() {
 
         <div className="mt-4">
           <div className="mb-1 text-[13px] font-extrabold text-text">🍽 搭配习惯</div>
-          <div className="mb-2 text-[11px] text-text3">开关或调整数量，改完点右上角保存规则。</div>
+          <div className="mb-2 text-[11px] text-text3">开关或调整数量/分值，改完点右上角保存规则。</div>
           {rulesLoading ? (
             <div className="py-2 text-xs text-text3">加载中…</div>
           ) : habitRules.length === 0 ? (

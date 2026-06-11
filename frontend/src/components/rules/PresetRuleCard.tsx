@@ -53,7 +53,7 @@ export default function PresetRuleCard({
 }) {
   const hasStepper = tpl.type === "limit" || tpl.type === "no_repeat"
   const hasPoints = tpl.type === "prefer" || tpl.type === "avoid"
-  const pointsValue = tpl.points && tpl.points > 0 ? tpl.points : tpl.type === "prefer" ? 20 : 15
+  const pointsValue = tpl.points && tpl.points > 0 ? tpl.points : tpl.type === "prefer" ? 20 : 15 // 与后端 defaultTemplatePoints 保持一致（prefer 20 / avoid 15）
 
   function updateN(next: number) {
     const clamped = Math.max(1, Math.min(10, next))
