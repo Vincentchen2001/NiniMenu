@@ -35,6 +35,7 @@ type ruleDishEnv struct {
 	CookTime           int      `expr:"cook_time"`
 	Difficulty         string   `expr:"difficulty"`
 	Favorite           bool     `expr:"favorite"`
+	CategoryFavorites  int      `expr:"category_favorites"`
 	Tags               []string `expr:"tags"`
 	Ingredients        []string `expr:"ingredients"`
 }
@@ -349,17 +350,18 @@ func sampleRuleEnv() map[string]any {
 		Tags:               []string{"家常菜"},
 		Ingredients:        []string{"鸡蛋"},
 	}
-	return buildRuleEnv(dish, []ruleDishEnv{}, []ruleDishEnv{}, []ruleDishEnv{}, "balanced", MealQuota{MeatCount: 1})
+	return buildRuleEnv(dish, []ruleDishEnv{}, []ruleDishEnv{}, []ruleDishEnv{}, "balanced", MealQuota{MeatCount: 1}, false)
 }
 
-func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, week []ruleDishEnv, profile string, quota MealQuota) map[string]any {
+func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, week []ruleDishEnv, profile string, quota MealQuota, isWeekend bool) map[string]any {
 	return map[string]any{
-		"candidate": candidate,
-		"meal":      meal,
-		"day":       day,
-		"week":      week,
-		"profile":   normalizePlanProfile(profile),
-		"quota":     ruleQuotaEnv{MeatCount: quota.MeatCount, VegCount: quota.VegCount, SoupCount: quota.SoupCount},
+		"candidate":  candidate,
+		"meal":       meal,
+		"day":        day,
+		"week":       week,
+		"profile":    normalizePlanProfile(profile),
+		"is_weekend": isWeekend,
+		"quota":      ruleQuotaEnv{MeatCount: quota.MeatCount, VegCount: quota.VegCount, SoupCount: quota.SoupCount},
 		"has": func(values []string, value string) bool {
 			return containsString(values, value)
 		},
@@ -390,7 +392,7 @@ func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, 
 	}
 }
 
-func dishRuleEnv(dish models.Dish) ruleDishEnv {
+func dishRuleEnv(dish models.Dish, categoryFavorites map[string]int) ruleDishEnv {
 	dish = ensureDishTraits(dish)
 	return ruleDishEnv{
 		ID:                 dish.ID,
@@ -408,15 +410,16 @@ func dishRuleEnv(dish models.Dish) ruleDishEnv {
 		CookTime:           dish.CookTime,
 		Difficulty:         dish.Difficulty,
 		Favorite:           dish.Favorite,
+		CategoryFavorites:  categoryFavorites[dish.Category],
 		Tags:               parseTags(dish.Tags),
 		Ingredients:        dishIngredientNames(dish.Ingredients),
 	}
 }
 
-func dishesRuleEnv(dishes []models.Dish) []ruleDishEnv {
+func dishesRuleEnv(dishes []models.Dish, categoryFavorites map[string]int) []ruleDishEnv {
 	result := make([]ruleDishEnv, 0, len(dishes))
 	for _, dish := range dishes {
-		result = append(result, dishRuleEnv(dish))
+		result = append(result, dishRuleEnv(dish, categoryFavorites))
 	}
 	return result
 }

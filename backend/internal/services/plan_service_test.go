@@ -431,7 +431,7 @@ func TestEvaluateConstraintRulesRelaxableSemantics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile rule: %v", err)
 			}
-			allowed, _ := evaluateConstraintRules(dish, "balanced", quota, nil, nil, nil, []compiledMenuRule{compiled}, tt.enforceSoft)
+			allowed, _ := evaluateConstraintRules(dish, weekPlanDayContext{profile: "balanced"}, quota, nil, nil, nil, []compiledMenuRule{compiled}, tt.enforceSoft)
 			if allowed != tt.wantAllowed {
 				t.Fatalf("evaluateConstraintRules(severity=%s relaxable=%v enforceSoft=%v) allowed = %v, want %v", tt.severity, tt.relaxable, tt.enforceSoft, allowed, tt.wantAllowed)
 			}
@@ -462,16 +462,16 @@ func TestEnsureDefaultMenuRulesUpgradesLegacySameProteinRule(t *testing.T) {
 	setupPlanServiceTestDB(t)
 
 	legacy := models.MenuRule{
-		Code:        "avoid_same_primary_protein",
-		Name:        "同餐主蛋白不重复",
-		Enabled:     true,
-		Scope:       "meal",
-		RuleKind:    "constraint",
-		Severity:    "hard",
-		Relaxable:   false,
-		Expression:  `countOverlapMeal("protein_sources", candidate.protein_sources) == 0 || hasOnly(candidate.protein_sources, "soy")`,
-		Priority:    40,
-		Message:     "同餐主蛋白来源重复",
+		Code:       "avoid_same_primary_protein",
+		Name:       "同餐主蛋白不重复",
+		Enabled:    true,
+		Scope:      "meal",
+		RuleKind:   "constraint",
+		Severity:   "hard",
+		Relaxable:  false,
+		Expression: `countOverlapMeal("protein_sources", candidate.protein_sources) == 0 || hasOnly(candidate.protein_sources, "soy")`,
+		Priority:   40,
+		Message:    "同餐主蛋白来源重复",
 	}
 	if err := database.DB.Create(&legacy).Error; err != nil {
 		t.Fatalf("create legacy rule: %v", err)
@@ -1198,5 +1198,53 @@ func TestRegenerateWeekPlanDayDropsStaleDayWarnings(t *testing.T) {
 		if strings.HasPrefix(warning, "周日") {
 			t.Errorf("stale sunday warning survived regeneration: %s", warning)
 		}
+	}
+}
+
+func TestRuleEnvCategoryFavoritesAndWeekend(t *testing.T) {
+	rule := models.MenuRule{
+		Code:       "env_probe",
+		Name:       "env probe",
+		Enabled:    true,
+		Scope:      "candidate",
+		RuleKind:   "score",
+		Severity:   "soft",
+		Relaxable:  true,
+		Expression: `(is_weekend ? 100 : 0) + (candidate.category_favorites == 0 ? -25 : 0)`,
+	}
+	compiled, err := compileMenuRule(rule)
+	if err != nil {
+		t.Fatalf("compileMenuRule() error = %v", err)
+	}
+	dish := models.Dish{Name: "测试菜", Category: "新疆菜", Enabled: true}
+
+	weekday := weekPlanDayContext{profile: "balanced", categoryFavorites: map[string]int{"川菜": 2}}
+	got := evaluateScoreRules(dish, weekday, MealQuota{MeatCount: 1}, nil, nil, nil, []compiledMenuRule{compiled}, true)
+	if got != -25 {
+		t.Fatalf("weekday unfamiliar-category score = %v, want -25", got)
+	}
+
+	weekend := weekPlanDayContext{profile: "balanced", isWeekend: true, categoryFavorites: map[string]int{"新疆菜": 1}}
+	got = evaluateScoreRules(dish, weekend, MealQuota{MeatCount: 1}, nil, nil, nil, []compiledMenuRule{compiled}, true)
+	if got != 100 {
+		t.Fatalf("weekend familiar-category score = %v, want 100", got)
+	}
+}
+
+func TestFavoriteCategoryCounts(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	seed := []models.Dish{
+		{Name: "大盘鸡", Category: "新疆菜", Favorite: true, Enabled: false},
+		{Name: "红烧肉", Category: "家常菜", Favorite: true, Enabled: true},
+		{Name: "清蒸鱼", Category: "家常菜", Enabled: true},
+	}
+	for i := range seed {
+		if err := database.DB.Create(&seed[i]).Error; err != nil {
+			t.Fatalf("seed dish: %v", err)
+		}
+	}
+	got := favoriteCategoryCounts()
+	if got["新疆菜"] != 1 || got["家常菜"] != 1 || got["汤品"] != 0 {
+		t.Fatalf("favoriteCategoryCounts() = %v", got)
 	}
 }

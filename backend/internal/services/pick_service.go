@@ -251,6 +251,27 @@ func tomorrowDishScore(d models.Dish, profile string) int {
 	return score
 }
 
+// favoriteCategoryCounts maps each category to its favorited-dish count.
+// Disabled dishes count too: a favorited dish that is temporarily disabled
+// still proves the household can cook that cuisine.
+func favoriteCategoryCounts() map[string]int {
+	type favoriteCategoryRow struct {
+		Category string
+		Count    int
+	}
+	var rows []favoriteCategoryRow
+	database.DB.Model(&models.Dish{}).
+		Select("category, count(*) as count").
+		Where("favorite = ?", true).
+		Group("category").
+		Scan(&rows)
+	result := make(map[string]int, len(rows))
+	for _, row := range rows {
+		result[row.Category] = row.Count
+	}
+	return result
+}
+
 func recentDishIDMap(days int) map[uint]bool {
 	if days <= 0 {
 		return map[uint]bool{}

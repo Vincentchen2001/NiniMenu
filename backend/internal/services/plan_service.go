@@ -109,13 +109,14 @@ var weekPlanDayNames = []string{"周一", "周二", "周三", "周四", "周五"
 // weekPlanGenContext bundles the dish pools, preferences and compiled rules
 // shared by full-week generation and single-day regeneration.
 type weekPlanGenContext struct {
-	lunchPool  []models.Dish
-	dinnerPool []models.Dish
-	prefs      WeekPlanPreferences
-	rules      []compiledMenuRule
-	recent     map[uint]bool
-	warnings   []string
-	r          *rand.Rand
+	lunchPool         []models.Dish
+	dinnerPool        []models.Dish
+	prefs             WeekPlanPreferences
+	rules             []compiledMenuRule
+	recent            map[uint]bool
+	categoryFavorites map[string]int
+	warnings          []string
+	r                 *rand.Rand
 }
 
 // buildWeekPlanGenContext returns nil when no enabled dish survives the
@@ -159,13 +160,14 @@ func buildWeekPlanGenContext() *weekPlanGenContext {
 	}
 
 	return &weekPlanGenContext{
-		lunchPool:  lunchPool,
-		dinnerPool: dinnerPool,
-		prefs:      prefs,
-		rules:      compiledRules,
-		recent:     recentDishIDMap(RecommendationCooldownDays()),
-		warnings:   warnings,
-		r:          rand.New(rand.NewSource(time.Now().UnixNano())),
+		lunchPool:         lunchPool,
+		dinnerPool:        dinnerPool,
+		prefs:             prefs,
+		rules:             compiledRules,
+		recent:            recentDishIDMap(RecommendationCooldownDays()),
+		categoryFavorites: favoriteCategoryCounts(),
+		warnings:          warnings,
+		r:                 rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -177,6 +179,7 @@ func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalU
 		periodPrefs = ctx.prefs.Weekend
 	}
 	dayCtx, lunchQuota, dinnerQuota := resolveWeekPlanDay(ctx.prefs, periodPrefs, dayIndex)
+	dayCtx.categoryFavorites = ctx.categoryFavorites
 	dayPlan := WeekDayPlan{
 		Date:   date.Format("2006-01-02"),
 		Lunch:  []models.Dish{},
@@ -290,16 +293,18 @@ func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 // weekPlanDayContext carries the effective taste profile and cravings for
 // one generated day.
 type weekPlanDayContext struct {
-	profile  string
-	dayWant  []string
-	weekWant []string
+	profile           string
+	dayWant           []string
+	weekWant          []string
+	isWeekend         bool
+	categoryFavorites map[string]int
 }
 
 // resolveWeekPlanDay applies the per-day override for weekday index i
 // (0=Monday) on top of the period defaults, and adds a temporary soup slot
 // on 靓汤 days whose quotas have no soup at all.
 func resolveWeekPlanDay(prefs WeekPlanPreferences, periodPrefs WeekPlanPeriodPreferences, i int) (weekPlanDayContext, MealQuota, MealQuota) {
-	dayCtx := weekPlanDayContext{profile: periodPrefs.Profile, weekWant: prefs.WeekWant}
+	dayCtx := weekPlanDayContext{profile: periodPrefs.Profile, weekWant: prefs.WeekWant, isWeekend: i >= 5}
 	if i >= 0 && i < len(weekPlanDayKeys) {
 		if override, ok := prefs.Days[weekPlanDayKeys[i]]; ok {
 			if override.Profile != "" {
@@ -440,12 +445,12 @@ func scoreWeekPlanCandidates(pool []models.Dish, slot weekPlanSlot, dayCtx weekP
 		if strictProfile && !matchesTomorrowProfile(dish, profile) {
 			continue
 		}
-		allowed, _ := evaluateConstraintRules(dish, dayCtx.profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
+		allowed, _ := evaluateConstraintRules(dish, dayCtx, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
 		if !allowed {
 			continue
 		}
 		score := baseWeekPlanDishScore(dish, slot, dayCtx, stage.strictRole)
-		score += evaluateScoreRules(dish, dayCtx.profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
+		score += evaluateScoreRules(dish, dayCtx, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
 		score += r.Float64()
 		scores = append(scores, weekPlanCandidateScore{dish: dish, score: score})
 	}
@@ -503,7 +508,7 @@ func baseWeekPlanDishScore(dish models.Dish, slot weekPlanSlot, dayCtx weekPlanD
 // rule. Relaxable rules are skipped once the relaxation ladder reaches the
 // enforceSoft=false stages; non-relaxable rules block at every stage,
 // regardless of severity.
-func evaluateConstraintRules(candidate models.Dish, profile string, quota MealQuota, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, enforceSoft bool) (bool, string) {
+func evaluateConstraintRules(candidate models.Dish, dayCtx weekPlanDayContext, quota MealQuota, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, enforceSoft bool) (bool, string) {
 	for _, item := range rules {
 		if item.rule.RuleKind != menuRuleKindConstraint {
 			continue
@@ -511,7 +516,7 @@ func evaluateConstraintRules(candidate models.Dish, profile string, quota MealQu
 		if item.rule.Relaxable && !enforceSoft {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked)), profile, quota)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
@@ -523,7 +528,7 @@ func evaluateConstraintRules(candidate models.Dish, profile string, quota MealQu
 	return true, ""
 }
 
-func evaluateScoreRules(candidate models.Dish, profile string, quota MealQuota, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, enforceSoft bool) float64 {
+func evaluateScoreRules(candidate models.Dish, dayCtx weekPlanDayContext, quota MealQuota, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, enforceSoft bool) float64 {
 	if !enforceSoft {
 		return 0
 	}
@@ -532,7 +537,7 @@ func evaluateScoreRules(candidate models.Dish, profile string, quota MealQuota, 
 		if item.rule.RuleKind != menuRuleKindScore {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked)), profile, quota)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue

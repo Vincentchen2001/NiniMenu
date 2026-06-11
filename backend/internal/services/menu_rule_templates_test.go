@@ -56,7 +56,7 @@ func templateRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEn
 	if week == nil {
 		week = []ruleDishEnv{}
 	}
-	return buildRuleEnv(candidate, meal, day, week, "balanced", MealQuota{MeatCount: 1})
+	return buildRuleEnv(candidate, meal, day, week, "balanced", MealQuota{MeatCount: 1}, false)
 }
 
 func TestMenuRuleTemplateLimitPrefer(t *testing.T) {
@@ -197,7 +197,7 @@ func TestDishRuleEnvIncludesIngredients(t *testing.T) {
 		Name:        "凉拌牛肉",
 		Ingredients: `[{"name":"牛肉","amount":"200g"},{"name":"香菜","amount":"1把"}]`,
 	}
-	env := dishRuleEnv(dish)
+	env := dishRuleEnv(dish, nil)
 	if !containsString(env.Ingredients, "香菜") || !containsString(env.Ingredients, "牛肉") {
 		t.Fatalf("dishRuleEnv ingredients = %v, want 牛肉+香菜", env.Ingredients)
 	}
