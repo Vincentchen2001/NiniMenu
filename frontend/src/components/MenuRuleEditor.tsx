@@ -39,9 +39,17 @@ function menuRuleComparable(rule: MenuRule) {
     severity: rule.severity,
     relaxable: rule.relaxable,
     expression: rule.expression,
+    template: rule.template || "",
     priority: rule.priority,
     message: rule.message,
   }
+}
+
+// Hand-editing a template-rendered field must detach the sentence template,
+// otherwise the backend re-renders the template on save and silently
+// overwrites the edit (and 校验 would validate the render, not the edit).
+function detachingPatch(rule: MenuRule, patch: Partial<MenuRule>): Partial<MenuRule> {
+  return rule.template ? { ...patch, template: "" } : patch
 }
 
 export function menuRulesEqual(left: MenuRule[], right: MenuRule[]) {
@@ -185,7 +193,7 @@ export default function MenuRuleEditor({
                     />
                     <select
                       value={rule.rule_kind}
-                      onChange={(event) => onChange(index, { rule_kind: event.target.value })}
+                      onChange={(event) => onChange(index, detachingPatch(rule, { rule_kind: event.target.value }))}
                       className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none"
                     >
                       <option value="constraint">约束</option>
@@ -193,7 +201,7 @@ export default function MenuRuleEditor({
                     </select>
                     <select
                       value={rule.severity}
-                      onChange={(event) => onChange(index, { severity: event.target.value })}
+                      onChange={(event) => onChange(index, detachingPatch(rule, { severity: event.target.value }))}
                       className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none"
                     >
                       <option value="hard">硬规则</option>
@@ -210,7 +218,7 @@ export default function MenuRuleEditor({
                   <div className="mb-2 grid grid-cols-2 gap-2">
                     <select
                       value={rule.scope}
-                      onChange={(event) => onChange(index, { scope: event.target.value })}
+                      onChange={(event) => onChange(index, detachingPatch(rule, { scope: event.target.value }))}
                       className="rounded-xl border border-border bg-card px-2.5 py-2 text-[12px] font-bold text-text2 outline-none"
                     >
                       <option value="candidate">候选</option>
@@ -222,7 +230,7 @@ export default function MenuRuleEditor({
                       <input
                         type="checkbox"
                         checked={rule.relaxable}
-                        onChange={(event) => onChange(index, { relaxable: event.target.checked })}
+                        onChange={(event) => onChange(index, detachingPatch(rule, { relaxable: event.target.checked }))}
                         className="h-4 w-4 accent-primary"
                       />
                       可降级
@@ -230,7 +238,7 @@ export default function MenuRuleEditor({
                   </div>
                   <textarea
                     value={rule.expression}
-                    onChange={(event) => onChange(index, { expression: event.target.value })}
+                    onChange={(event) => onChange(index, detachingPatch(rule, { expression: event.target.value }))}
                     rows={2}
                     className="w-full rounded-xl border border-border bg-card px-3 py-2 font-mono text-[12px] leading-relaxed text-text outline-none"
                   />

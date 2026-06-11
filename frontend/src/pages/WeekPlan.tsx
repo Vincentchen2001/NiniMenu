@@ -760,6 +760,15 @@ export default function WeekPlan() {
         setDirtyPrefs(false)
         qc.setQueryData(["week-plan", "preferences"], nextPrefs)
       }
+      if (dirtyPlan) {
+        // Persist manual edits first so the regeneration works off them and
+        // the other six days keep the user's changes.
+        const saved = await weekPlanApi.save(draftPlan)
+        const nextPlan = normalizePlan(saved)
+        setDraftPlan(nextPlan)
+        setDirtyPlan(false)
+        qc.setQueryData(["week-plan"], nextPlan)
+      }
       return weekPlanApi.regenerateDay(date)
     },
     onSuccess: (plan) => {

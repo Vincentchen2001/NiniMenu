@@ -7,7 +7,7 @@ import PresetRuleCard from "@/components/rules/PresetRuleCard"
 import RuleSentenceBuilder from "@/components/rules/RuleSentenceBuilder"
 import { settingsApi, shoppingCategoriesApi, weekPlanApi } from "@/api"
 import { parseTemplate } from "@/lib/menuRuleTemplates"
-import { asString } from "@/lib/utils"
+import { asArray, asString } from "@/lib/utils"
 import { useAppInfoStore } from "@/store/useAppInfoStore"
 import type { MenuRule, ShoppingCategoryOverride } from "@/types"
 import toast from "react-hot-toast"
@@ -137,14 +137,13 @@ export default function AdminSettings() {
 
   const rulesBusy = rulesLoading || saveRulesMut.isPending || validateRuleMut.isPending
 
-  const blockedIngredients = useMemo(() => {
-    try {
-      const parsed = JSON.parse(asString(settings?.blocked_ingredients, "[]"))
-      return Array.isArray(parsed) ? parsed.filter((word): word is string => typeof word === "string") : []
-    } catch {
-      return []
-    }
-  }, [settings])
+  // GetSettings inlines valid-JSON setting values as real JSON, so this
+  // arrives as an array, not a string — asString would fall back to "[]"
+  // and silently empty the list (then the next add would clobber it).
+  const blockedIngredients = useMemo(
+    () => asArray<string>(settings?.blocked_ingredients).filter((word) => typeof word === "string"),
+    [settings],
+  )
 
   const templatedRules = useMemo(
     () => draftRules.map((rule, index) => ({ rule, index, tpl: parseTemplate(rule) })),
