@@ -1284,3 +1284,82 @@ func TestFavoriteCategoryCounts(t *testing.T) {
 		t.Fatalf("favoriteCategoryCounts() = %v", got)
 	}
 }
+
+func TestAdjacentPlannedSoups(t *testing.T) {
+	soup := func(name string) models.Dish {
+		return models.Dish{Name: name, Category: "汤品", DishRole: "soup"}
+	}
+	meat := models.Dish{Name: "红烧排骨", Category: "家常菜", DishRole: "meat"}
+	days := []WeekDayPlan{
+		{Lunch: []models.Dish{soup("紫菜蛋花汤")}, Dinner: []models.Dish{meat}},
+		{Lunch: []models.Dish{meat}, Dinner: []models.Dish{soup("萝卜丝鲫鱼汤")}},
+		{Lunch: []models.Dish{soup("冬瓜排骨汤")}, Dinner: []models.Dish{}},
+	}
+
+	got := adjacentPlannedSoups(days, 1)
+	if len(got) != 2 || got[0].Name != "紫菜蛋花汤" || got[1].Name != "冬瓜排骨汤" {
+		t.Fatalf("adjacentPlannedSoups(days, 1) returned %d soups (%+v), want 紫菜蛋花汤+冬瓜排骨汤", len(got), got)
+	}
+	if got := adjacentPlannedSoups(days, 0); len(got) != 1 || got[0].Name != "萝卜丝鲫鱼汤" {
+		t.Fatalf("adjacentPlannedSoups(days, 0) returned %d soups, want only 萝卜丝鲫鱼汤", len(got))
+	}
+	if got := adjacentPlannedSoups(days, 2); len(got) != 1 || got[0].Name != "萝卜丝鲫鱼汤" {
+		t.Fatalf("adjacentPlannedSoups(days, 2) returned %d soups, want only 萝卜丝鲫鱼汤", len(got))
+	}
+}
+
+// TestSoupSchedulingRulesViaScoreEvaluation runs the two seeded v4 rules
+// through the real evaluateScoreRules path: compiled expression + rule env.
+func TestSoupSchedulingRulesViaScoreEvaluation(t *testing.T) {
+	var slowSoupRule, repeatRule models.MenuRule
+	for _, rule := range models.DefaultMenuRules() {
+		switch rule.Code {
+		case "weekly_slow_soup_limit":
+			slowSoupRule = rule
+		case "soup_ingredient_repeat_penalty":
+			repeatRule = rule
+		}
+	}
+	compiledSlow, err := compileMenuRule(slowSoupRule)
+	if err != nil {
+		t.Fatalf("compile weekly_slow_soup_limit: %v", err)
+	}
+	compiledRepeat, err := compileMenuRule(repeatRule)
+	if err != nil {
+		t.Fatalf("compile soup_ingredient_repeat_penalty: %v", err)
+	}
+
+	slowSoup := func(name string) models.Dish {
+		return models.Dish{Name: name, Category: "汤品", DishRole: "soup", CookTime: 90,
+			TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	}
+	candidate := slowSoup("猪肚鸡汤")
+	dayCtx := weekPlanDayContext{profile: "balanced"}
+
+	// Third slow soup of the week fights -25; the second is free.
+	week := []models.Dish{slowSoup("莲藕排骨汤"), slowSoup("酸萝卜老鸭汤")}
+	if got := evaluateScoreRules(candidate, dayCtx, MealQuota{}, nil, nil, week, []compiledMenuRule{compiledSlow}, true); got != -25 {
+		t.Fatalf("third slow soup score = %v, want -25", got)
+	}
+	if got := evaluateScoreRules(candidate, dayCtx, MealQuota{}, nil, nil, week[:1], []compiledMenuRule{compiledSlow}, true); got != 0 {
+		t.Fatalf("second slow soup score = %v, want 0", got)
+	}
+
+	// Yesterday's soup shared 鲫鱼 → -18; aromatics-only overlap (姜) → 0.
+	yesterday := models.Dish{Name: "萝卜丝鲫鱼汤", Category: "汤品", DishRole: "soup",
+		Ingredients: `[{"name":"鲫鱼","amount":"1条"},{"name":"萝卜","amount":"半根"},{"name":"姜","amount":"3片"}]`,
+		TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	repeatCtx := weekPlanDayContext{profile: "balanced", prevSoups: []models.Dish{yesterday}}
+	todayRepeat := models.Dish{Name: "鲫鱼豆腐汤", Category: "汤品", DishRole: "soup",
+		Ingredients: `[{"name":"鲫鱼","amount":"1条"},{"name":"豆腐","amount":"1块"},{"name":"姜","amount":"3片"}]`,
+		TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	if got := evaluateScoreRules(todayRepeat, repeatCtx, MealQuota{}, nil, nil, nil, []compiledMenuRule{compiledRepeat}, true); got != -18 {
+		t.Fatalf("repeated soup main ingredient score = %v, want -18", got)
+	}
+	todayFresh := models.Dish{Name: "番茄蛋花汤", Category: "汤品", DishRole: "soup",
+		Ingredients: `[{"name":"番茄","amount":"1个"},{"name":"鸡蛋","amount":"1个"},{"name":"姜","amount":"2片"}]`,
+		TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	if got := evaluateScoreRules(todayFresh, repeatCtx, MealQuota{}, nil, nil, nil, []compiledMenuRule{compiledRepeat}, true); got != 0 {
+		t.Fatalf("aromatics-only overlap score = %v, want 0", got)
+	}
+}

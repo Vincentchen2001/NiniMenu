@@ -173,13 +173,14 @@ func buildWeekPlanGenContext() *weekPlanGenContext {
 
 // generateDay fills one weekday (0=Monday). globalUsed and weekPicked carry
 // cross-day dedup state and are updated with the picked dishes.
-func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalUsed map[uint]bool, weekPicked *[]models.Dish) WeekDayPlan {
+func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalUsed map[uint]bool, weekPicked *[]models.Dish, prevSoups []models.Dish) WeekDayPlan {
 	periodPrefs := ctx.prefs.Weekday
 	if dayIndex >= 5 {
 		periodPrefs = ctx.prefs.Weekend
 	}
 	dayCtx, lunchQuota, dinnerQuota := resolveWeekPlanDay(ctx.prefs, periodPrefs, dayIndex)
 	dayCtx.categoryFavorites = ctx.categoryFavorites
+	dayCtx.prevSoups = prevSoups
 	dayPlan := WeekDayPlan{
 		Date:   date.Format("2006-01-02"),
 		Lunch:  []models.Dish{},
@@ -218,8 +219,11 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 	var days []WeekDayPlan
 	globalUsed := make(map[uint]bool)
 	var weekPicked []models.Dish
+	var prevSoups []models.Dish
 	for i := 0; i < 7; i++ {
-		days = append(days, ctx.generateDay(i, monday.AddDate(0, 0, i), globalUsed, &weekPicked))
+		day := ctx.generateDay(i, monday.AddDate(0, 0, i), globalUsed, &weekPicked, prevSoups)
+		days = append(days, day)
+		prevSoups = soupsFromDishes(appendDishSlices(day.Lunch, day.Dinner))
 	}
 
 	return &WeekPlan{Days: days, Warnings: uniqueWarnings(ctx.warnings)}, nil
@@ -271,7 +275,7 @@ func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 		}
 	}
 
-	newPlan.Days[dayIndex] = ctx.generateDay(dayIndex, parsedDate, globalUsed, &weekPicked)
+	newPlan.Days[dayIndex] = ctx.generateDay(dayIndex, parsedDate, globalUsed, &weekPicked, adjacentPlannedSoups(newPlan.Days, dayIndex))
 	// Retire the target day's old warnings — they describe picks that no
 	// longer exist; cross-day and rule-compile warnings stay.
 	dayName := current.Days[dayIndex].DayName
@@ -290,6 +294,32 @@ func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 	return newPlan, nil
 }
 
+// soupsFromDishes filters the dishes that occupy soup slots, using the same
+// dual test (inferred role OR name/category) slot assignment uses.
+func soupsFromDishes(dishes []models.Dish) []models.Dish {
+	var result []models.Dish
+	for _, dish := range dishes {
+		if dish.DishRole == "soup" || isSoupDish(dish) {
+			result = append(result, dish)
+		}
+	}
+	return result
+}
+
+// adjacentPlannedSoups collects the soups already planned on the days next
+// to dayIndex, so a regenerated day's soup avoids clashing with both
+// neighbors (sequential generation only ever has the previous day).
+func adjacentPlannedSoups(days []WeekDayPlan, dayIndex int) []models.Dish {
+	var result []models.Dish
+	for _, neighbor := range []int{dayIndex - 1, dayIndex + 1} {
+		if neighbor < 0 || neighbor >= len(days) {
+			continue
+		}
+		result = append(result, soupsFromDishes(appendDishSlices(days[neighbor].Lunch, days[neighbor].Dinner))...)
+	}
+	return result
+}
+
 // weekPlanDayContext carries the effective taste profile and cravings for
 // one generated day.
 type weekPlanDayContext struct {
@@ -298,6 +328,7 @@ type weekPlanDayContext struct {
 	weekWant          []string
 	isWeekend         bool
 	categoryFavorites map[string]int
+	prevSoups         []models.Dish
 }
 
 // resolveWeekPlanDay applies the per-day override for weekday index i
@@ -516,7 +547,7 @@ func evaluateConstraintRules(candidate models.Dish, dayCtx weekPlanDayContext, q
 		if item.rule.Relaxable && !enforceSoft {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), nil, dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
@@ -537,7 +568,7 @@ func evaluateScoreRules(candidate models.Dish, dayCtx weekPlanDayContext, quota 
 		if item.rule.RuleKind != menuRuleKindScore {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), nil, dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
