@@ -199,6 +199,9 @@ func matchesTomorrowProfile(d models.Dish, profile string) bool {
 // weekday_slow_soup_penalty) for the tomorrow-pick path, which doesn't run
 // the rule engine. Keep the numbers in sync with models.DefaultMenuRules;
 // rule-page tuning only reaches the week plan.
+// weekly_slow_soup_limit and soup_ingredient_repeat_penalty are week/prev-soup
+// scoped and intentionally not mirrored — the tomorrow pick has no week or
+// prev-soup context.
 func pickPenaltyAdjustment(d models.Dish, categoryFavorites map[string]int, weekend bool) int {
 	adjust := 0
 	if !d.Favorite {
