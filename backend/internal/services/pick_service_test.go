@@ -41,6 +41,13 @@ func TestLightProfileSoupRespectsRichness(t *testing.T) {
 	if got, want := tomorrowDishScore(clearSoup, "light"), tomorrowDishScore(richSoup, "light"); got <= want {
 		t.Errorf("light score clear=%d rich=%d, want clear > rich", got, want)
 	}
+
+	// Factory-realistic 猪肚鸡汤: seeded soups carry no explicit richness
+	// (inference yields 0) — the taste guard alone must exclude it.
+	factoryRichSoup := models.Dish{Name: "猪肚鸡汤", Category: "汤品", Taste: "浓香", RichnessLevel: 0, DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	if matchesTomorrowProfile(factoryRichSoup, "light") {
+		t.Errorf("factory rich soup (浓香, richness 0) should not match light profile")
+	}
 }
 
 func TestPickPenaltyAdjustment(t *testing.T) {
@@ -76,6 +83,20 @@ func TestPickPenaltyAdjustment(t *testing.T) {
 	hardSoup := models.Dish{Name: "佛跳墙", Category: "家常菜", DishRole: "soup", CookTime: 30, Difficulty: "hard"}
 	if got := pickPenaltyAdjustment(hardSoup, favs, false); got != -42 {
 		t.Errorf("weekday hard soup = %d, want -42 (-12 -30 via difficulty)", got)
+	}
+}
+
+// tomorrowDishScore is shared by the week plan (which applies the v3
+// penalties via menu rules) and the pick path (which applies them via
+// pickPenaltyAdjustment). If a penalty term ever leaks into this function,
+// the week plan double-counts — pin favorite's only influence to the
+// long-standing +12.
+func TestTomorrowDishScoreHasNoPenaltyTerms(t *testing.T) {
+	base := models.Dish{Name: "青椒肉丝", Category: "新疆菜", DishRole: "meat", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	fav := base
+	fav.Favorite = true
+	if got := tomorrowDishScore(fav, "balanced") - tomorrowDishScore(base, "balanced"); got != 12 {
+		t.Errorf("favorite delta inside tomorrowDishScore = %d, want exactly 12 (no penalty terms)", got)
 	}
 }
 

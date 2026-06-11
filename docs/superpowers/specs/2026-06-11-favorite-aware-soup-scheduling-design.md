@@ -90,10 +90,10 @@ the unconditional `strings.Contains(category, "汤")` clause and instead
 accepts a soup only when `RichnessLevel <= 1`:
 
 ```
-light: 清淡 taste || 鲜 taste || (soup-ish && richness_level <= 1)
+light: 清淡 taste || 鲜 taste || (category contains 汤 && richness_level <= 1 && taste lacks 浓)
 ```
 
-where soup-ish = `category contains 汤 || isSoupDish(dish)`. The `+8` light
+The 浓-taste guard carries seeded data, where stews rarely infer richness >= 2; the earlier soup-ish (isSoupDish) widening was dropped after integration review — it admitted 煲/羹-named staples into the light profile. The `+8` light
 bonus for 汤 categories in `tomorrowDishScore` gets the same richness guard.
 Dishes are passed through `ensureDishTraits` before the check so inferred
 richness is populated on both paths.

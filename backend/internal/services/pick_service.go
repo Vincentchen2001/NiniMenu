@@ -170,10 +170,11 @@ func filterTomorrowPool(dishes []models.Dish, profile string, excluded map[uint]
 }
 
 // isLightSoup reports whether a dish is a soup light enough for the 清淡
-// profile — rich stews (richness_level >= 2) no longer pass just because
-// their category contains 汤.
+// profile. Factory stews rarely carry an inferred richness >= 2, so the
+// taste guard (浓香/浓郁) does the heavy lifting on seeded data; the
+// richness guard covers dishes with explicit traits.
 func isLightSoup(d models.Dish) bool {
-	return (strings.Contains(d.Category, "汤") || isSoupDish(d)) && d.RichnessLevel <= 1
+	return strings.Contains(d.Category, "汤") && d.RichnessLevel <= 1 && !containsTaste(d.Taste, "浓")
 }
 
 func matchesTomorrowProfile(d models.Dish, profile string) bool {
