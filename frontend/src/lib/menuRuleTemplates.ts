@@ -41,13 +41,14 @@ const FIXED_CATEGORY_LABELS: Record<string, string> = {
   slow: "费时菜（超过45分钟）",
 }
 
-// Display-only categories used by the v3 preset rules. Not offered in the
-// sentence builder: they have no count expression, so a limit-type rule
-// built from them would fail backend validation.
+// Display-only categories used by the v3/v4 preset rules. Not offered in the
+// sentence builder — they exist for rendering the factory rules' sentences.
 const DISPLAY_ONLY_CATEGORY_LABELS: Record<string, string> = {
   non_favorite: "没收藏的菜",
   unfamiliar_category: "一道收藏都没有的菜系",
   weekday_slow_soup: "工作日的费时汤",
+  slow_soup: "费时汤（炖煮超45分钟）",
+  soup_ingredient_repeat: "和昨天的汤撞主料的汤",
 }
 
 export const CATEGORY_OPTIONS: Array<{ key: string; label: string }> = [
