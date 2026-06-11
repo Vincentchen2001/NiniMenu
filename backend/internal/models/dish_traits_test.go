@@ -71,6 +71,12 @@ func TestInferDishTraitsSoupRole(t *testing.T) {
 			want: "veg",
 		},
 		{
+			name: "tag 汤品 poultry main",
+			dish: Dish{Name: "汽锅鸡", Category: "云南菜", Tags: `["云南菜","晚餐","汤品"]`,
+				Ingredients: `[{"name":"鸡肉","amount":"500克"}]`},
+			want: "meat",
+		},
+		{
 			name: "name suffix 汤 stays soup",
 			dish: Dish{Name: "莲藕花生排骨汤", Category: "粤菜",
 				Ingredients: `[{"name":"排骨","amount":"300克"},{"name":"莲藕","amount":"1节"}]`},
