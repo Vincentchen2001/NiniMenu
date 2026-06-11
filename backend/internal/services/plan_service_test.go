@@ -127,7 +127,7 @@ func TestGenerateWeekPlanUsesWeekdayWeekendMeatVegSoupPreferences(t *testing.T) 
 	for i := 1; i <= 20; i++ {
 		createDishForPlanTest(t, fmt.Sprintf("青菜%d", i), `["素菜"]`, `[{"name":"青菜","amount":"1把"}]`)
 		createDishForPlanTest(t, fmt.Sprintf("鸡肉%d", i), `["家常菜"]`, `[{"name":"鸡肉","amount":"100g"}]`)
-		createDishForPlanTest(t, fmt.Sprintf("菌菇汤%d", i), `["汤品"]`, `[{"name":"香菇","amount":"50g"},{"name":"金针菇","amount":"50g"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("第%d号菌菇汤", i), `["汤品"]`, `[{"name":"香菇","amount":"50g"},{"name":"金针菇","amount":"50g"}]`)
 	}
 
 	plan, err := GenerateWeekPlan()
@@ -275,13 +275,23 @@ func TestIsSoupDish(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "soup tag",
+			name: "soup tag no longer counts",
 			dish: models.Dish{Name: "菌菇煲", Tags: `["汤品"]`, Ingredients: `[{"name":"香菇","amount":"50g"}]`},
+			want: false,
+		},
+		{
+			name: "name suffix",
+			dish: models.Dish{Name: "紫菜蛋花汤", Tags: `[]`, Ingredients: `[{"name":"紫菜","amount":"适量"},{"name":"鸡蛋","amount":"1个"}]`},
 			want: true,
 		},
 		{
-			name: "name keyword",
-			dish: models.Dish{Name: "紫菜蛋花汤", Tags: `[]`, Ingredients: `[{"name":"紫菜","amount":"适量"},{"name":"鸡蛋","amount":"1个"}]`},
+			name: "mid-name 汤 no longer counts",
+			dish: models.Dish{Name: "酸汤鱼", Category: "贵州菜", Tags: `[]`, Ingredients: `[{"name":"草鱼","amount":"1条"}]`},
+			want: false,
+		},
+		{
+			name: "name suffix 羹",
+			dish: models.Dish{Name: "西湖牛肉羹", Category: "杭帮菜", Tags: `[]`, Ingredients: `[{"name":"牛肉","amount":"100克"}]`},
 			want: true,
 		},
 		{
@@ -766,7 +776,7 @@ func TestGenerateWeekPlanSoupDayAddsTempSoupSlot(t *testing.T) {
 	})
 	for i := 1; i <= 10; i++ {
 		createDishForPlanTest(t, fmt.Sprintf("青椒肉丝%d", i), `["家常菜"]`, `[{"name":"猪肉","amount":"100g"}]`)
-		createDishForPlanTest(t, fmt.Sprintf("菌菇汤%d", i), `["汤品"]`, `[{"name":"香菇","amount":"50g"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("第%d号菌菇汤", i), `["汤品"]`, `[{"name":"香菇","amount":"50g"}]`)
 	}
 
 	plan, err := GenerateWeekPlan()

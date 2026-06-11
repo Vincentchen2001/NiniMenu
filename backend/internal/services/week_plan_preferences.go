@@ -203,23 +203,8 @@ func clampInt(value int, min int, max int) int {
 	return value
 }
 
+// isSoupDish mirrors models.IsSoupName so slot matching, theme bonuses and
+// trait inference agree on what counts as a soup.
 func isSoupDish(dish models.Dish) bool {
-	tags := parseTags(dish.Tags)
-	textParts := []string{dish.Name, dish.Category}
-	textParts = append(textParts, tags...)
-	text := strings.Join(textParts, " ")
-	return containsAnyKeyword(text, soupDishKeywords)
-}
-
-func containsAnyKeyword(text string, keywords []string) bool {
-	for _, keyword := range keywords {
-		if keyword != "" && strings.Contains(text, keyword) {
-			return true
-		}
-	}
-	return false
-}
-
-var soupDishKeywords = []string{
-	"汤", "羹", "煲", "汤品", "蛋花汤", "例汤",
+	return models.IsSoupName(dish.Name, dish.Category)
 }
