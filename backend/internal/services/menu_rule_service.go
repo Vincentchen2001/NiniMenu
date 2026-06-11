@@ -364,15 +364,16 @@ func sampleRuleEnv() map[string]any {
 		Tags:               []string{"家常菜"},
 		Ingredients:        []string{"鸡蛋"},
 	}
-	return buildRuleEnv(dish, []ruleDishEnv{}, []ruleDishEnv{}, []ruleDishEnv{}, "balanced", MealQuota{MeatCount: 1}, false)
+	return buildRuleEnv(dish, []ruleDishEnv{}, []ruleDishEnv{}, []ruleDishEnv{}, []ruleDishEnv{}, "balanced", MealQuota{MeatCount: 1}, false)
 }
 
-func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, week []ruleDishEnv, profile string, quota MealQuota, isWeekend bool) map[string]any {
+func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, week []ruleDishEnv, prevSoups []ruleDishEnv, profile string, quota MealQuota, isWeekend bool) map[string]any {
 	return map[string]any{
 		"candidate":  candidate,
 		"meal":       meal,
 		"day":        day,
 		"week":       week,
+		"prev_soups": prevSoups,
 		"profile":    normalizePlanProfile(profile),
 		"is_weekend": isWeekend,
 		"quota":      ruleQuotaEnv{MeatCount: quota.MeatCount, VegCount: quota.VegCount, SoupCount: quota.SoupCount},
@@ -399,6 +400,9 @@ func buildRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEnv, 
 		},
 		"countOverlapWeek": func(field string, values []string) int {
 			return countRuleDishOverlap(week, field, values)
+		},
+		"countOverlapPrevSoup": func(field string, values []string) int {
+			return countRuleDishOverlap(prevSoups, field, filterSoupAromatics(values))
 		},
 		"hasOnly": func(values []string, value string) bool {
 			return len(values) == 1 && values[0] == value
@@ -472,6 +476,32 @@ func countRuleDishOverlap(dishes []ruleDishEnv, field string, values []string) i
 	return count
 }
 
+// soupAromaticsBlocklist lists base aromatics, seasonings and liquids that
+// must not make two soups count as sharing a main ingredient.
+var soupAromaticsBlocklist = map[string]bool{
+	"葱": true, "小葱": true, "大葱": true, "葱花": true, "香葱": true, "葱段": true,
+	"姜": true, "生姜": true, "姜片": true, "姜丝": true,
+	"蒜": true, "大蒜": true, "蒜末": true, "蒜瓣": true,
+	"香菜": true, "盐": true, "食盐": true, "糖": true, "白糖": true, "冰糖": true,
+	"食用油": true, "油": true, "香油": true, "芝麻油": true, "猪油": true,
+	"料酒": true, "生抽": true, "老抽": true, "醋": true,
+	"胡椒": true, "白胡椒": true, "胡椒粉": true, "白胡椒粉": true,
+	"鸡精": true, "味精": true, "枸杞": true, "红枣": true, "大枣": true,
+	"八角": true, "花椒": true, "桂皮": true, "香叶": true,
+	"清水": true, "热水": true, "温水": true, "开水": true, "高汤": true, "清汤": true,
+}
+
+func filterSoupAromatics(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if soupAromaticsBlocklist[strings.TrimSpace(value)] {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
 func ruleDishFieldMatches(dish ruleDishEnv, field string, value string) bool {
 	switch field {
 	case "protein_sources":
@@ -484,6 +514,8 @@ func ruleDishFieldMatches(dish ruleDishEnv, field string, value string) bool {
 		return dish.DishRole == value
 	case "heavy_spicy":
 		return value == "true" && dish.SpiceLevel >= 2 && dish.RichnessLevel >= 2
+	case "ingredients":
+		return containsString(dish.Ingredients, value)
 	default:
 		return false
 	}

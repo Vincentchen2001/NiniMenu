@@ -516,7 +516,7 @@ func evaluateConstraintRules(candidate models.Dish, dayCtx weekPlanDayContext, q
 		if item.rule.Relaxable && !enforceSoft {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), nil, dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
@@ -537,7 +537,7 @@ func evaluateScoreRules(candidate models.Dish, dayCtx weekPlanDayContext, quota 
 		if item.rule.RuleKind != menuRuleKindScore {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), nil, dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue

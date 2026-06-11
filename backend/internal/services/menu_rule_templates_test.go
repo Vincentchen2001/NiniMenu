@@ -56,7 +56,7 @@ func templateRuleEnv(candidate ruleDishEnv, meal []ruleDishEnv, day []ruleDishEn
 	if week == nil {
 		week = []ruleDishEnv{}
 	}
-	return buildRuleEnv(candidate, meal, day, week, "balanced", MealQuota{MeatCount: 1}, false)
+	return buildRuleEnv(candidate, meal, day, week, []ruleDishEnv{}, "balanced", MealQuota{MeatCount: 1}, false)
 }
 
 func TestMenuRuleTemplateLimitPrefer(t *testing.T) {
@@ -504,5 +504,35 @@ func TestEnsureDefaultMenuRulesKeepsUserModifiedRules(t *testing.T) {
 	}
 	if kept.Name != "我的蛋类规则" {
 		t.Errorf("user-modified kept rule renamed: %q", kept.Name)
+	}
+}
+
+func TestCountOverlapPrevSoupHelper(t *testing.T) {
+	prevSoups := []ruleDishEnv{{
+		Name: "萝卜丝鲫鱼汤", DishRole: "soup",
+		Ingredients: []string{"鲫鱼", "萝卜", "姜", "葱"},
+	}}
+	candidate := ruleDishEnv{Name: "鲫鱼豆腐汤", DishRole: "soup", Ingredients: []string{"鲫鱼", "豆腐", "姜"}}
+	env := buildRuleEnv(candidate, nil, nil, nil, prevSoups, "balanced", MealQuota{}, false)
+
+	fn, ok := env["countOverlapPrevSoup"].(func(string, []string) int)
+	if !ok {
+		t.Fatalf("countOverlapPrevSoup helper missing from env")
+	}
+	if got := fn("ingredients", candidate.Ingredients); got != 1 {
+		t.Fatalf("countOverlapPrevSoup(鲫鱼豆腐汤) = %d, want 1 (shared 鲫鱼)", got)
+	}
+
+	// Shared 姜/葱 are aromatics — they must not count as a repeat.
+	aromaticsOnly := []string{"番茄", "鸡蛋", "姜", "葱"}
+	if got := fn("ingredients", aromaticsOnly); got != 0 {
+		t.Fatalf("countOverlapPrevSoup(aromatics only) = %d, want 0", got)
+	}
+
+	// Empty prev_soups (Monday of a fresh week) is inert.
+	emptyEnv := buildRuleEnv(candidate, nil, nil, nil, nil, "balanced", MealQuota{}, false)
+	emptyFn := emptyEnv["countOverlapPrevSoup"].(func(string, []string) int)
+	if got := emptyFn("ingredients", candidate.Ingredients); got != 0 {
+		t.Fatalf("countOverlapPrevSoup(no prev soups) = %d, want 0", got)
 	}
 }
