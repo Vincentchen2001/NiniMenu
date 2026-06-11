@@ -102,7 +102,7 @@ export default function PresetRuleCard({
       )}
       {hasPoints && (
         <div className="mt-2 flex items-center justify-between gap-2 rounded-xl bg-card px-3 py-2">
-          <span className="text-[11px] font-bold text-text3">{tpl.type === "avoid" ? "降多少分" : "加多少分"}</span>
+          <span className="text-[11px] font-bold text-text3">{tpl.type === "prefer" ? "加多少分" : "降多少分"}</span>
           <NStepper value={pointsValue} disabled={!canEdit || !rule.enabled} onChange={updatePoints} min={1} max={99} />
         </div>
       )}
