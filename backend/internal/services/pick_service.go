@@ -108,6 +108,10 @@ func PickTomorrowDishes(opts TomorrowPickOptions) ([]models.Dish, error) {
 		return nil, nil
 	}
 
+	for i := range dishes {
+		dishes[i] = ensureDishTraits(dishes[i])
+	}
+
 	excluded := make(map[uint]bool, len(opts.ExcludeIDs))
 	for _, id := range opts.ExcludeIDs {
 		if id > 0 {
@@ -127,7 +131,8 @@ func PickTomorrowDishes(opts TomorrowPickOptions) ([]models.Dish, error) {
 		pool = filterTomorrowPool(dishes, "balanced", map[uint]bool{}, recent, false)
 	}
 
-	sortTomorrowPool(pool, profile)
+	tomorrow := time.Now().AddDate(0, 0, 1)
+	sortTomorrowPool(pool, profile, favoriteCategoryCounts(), isWeekend(tomorrow))
 	if len(pool) > count {
 		pool = pool[:count]
 	}
@@ -188,14 +193,34 @@ func matchesTomorrowProfile(d models.Dish, profile string) bool {
 	}
 }
 
-func sortTomorrowPool(dishes []models.Dish, profile string) {
+// pickPenaltyAdjustment mirrors the three v3 default score rules
+// (non_favorite_penalty / unfamiliar_category_penalty /
+// weekday_slow_soup_penalty) for the tomorrow-pick path, which doesn't run
+// the rule engine. Keep the numbers in sync with models.DefaultMenuRules;
+// rule-page tuning only reaches the week plan.
+func pickPenaltyAdjustment(d models.Dish, categoryFavorites map[string]int, weekend bool) int {
+	adjust := 0
+	if !d.Favorite {
+		adjust -= 12
+	}
+	if d.Category != "" && categoryFavorites[d.Category] == 0 {
+		adjust -= 25
+	}
+	if !weekend && d.DishRole == "soup" && (d.CookTime > 45 || d.Difficulty == "hard") {
+		adjust -= 30
+	}
+	return adjust
+}
+
+func sortTomorrowPool(dishes []models.Dish, profile string, categoryFavorites map[string]int, weekend bool) {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	r.Shuffle(len(dishes), func(i, j int) {
 		dishes[i], dishes[j] = dishes[j], dishes[i]
 	})
 
 	sort.SliceStable(dishes, func(i, j int) bool {
-		a, b := tomorrowDishScore(dishes[i], profile), tomorrowDishScore(dishes[j], profile)
+		a := tomorrowDishScore(dishes[i], profile) + pickPenaltyAdjustment(dishes[i], categoryFavorites, weekend)
+		b := tomorrowDishScore(dishes[j], profile) + pickPenaltyAdjustment(dishes[j], categoryFavorites, weekend)
 		if a != b {
 			return a > b
 		}

@@ -30,7 +30,7 @@ func TestTomorrowProfileSoup(t *testing.T) {
 func TestLightProfileSoupRespectsRichness(t *testing.T) {
 	richSoup := models.Dish{Name: "猪肚鸡汤", Category: "汤品", Taste: "浓香", RichnessLevel: 2, DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
 	// 酸甜 taste matches no light keyword — only the soup clause can let it in.
-	clearSoup := models.Dish{Name: "番茄蛋花汤", Category: "汤品", Taste: "酸甜", RichnessLevel: 0, DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	clearSoup := models.Dish{Name: "番茄蛋花汤", Category: "汤品", Taste: "酸甜", RichnessLevel: 1, DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
 
 	if matchesTomorrowProfile(richSoup, "light") {
 		t.Errorf("rich soup (richness 2) should not match light profile")
@@ -40,5 +40,49 @@ func TestLightProfileSoupRespectsRichness(t *testing.T) {
 	}
 	if got, want := tomorrowDishScore(clearSoup, "light"), tomorrowDishScore(richSoup, "light"); got <= want {
 		t.Errorf("light score clear=%d rich=%d, want clear > rich", got, want)
+	}
+}
+
+func TestPickPenaltyAdjustment(t *testing.T) {
+	favs := map[string]int{"家常菜": 2}
+
+	fav := models.Dish{Name: "红烧肉", Category: "家常菜", Favorite: true, DishRole: "meat"}
+	if got := pickPenaltyAdjustment(fav, favs, false); got != 0 {
+		t.Errorf("favorite dish = %d, want 0", got)
+	}
+	plain := models.Dish{Name: "清炒时蔬", Category: "家常菜", DishRole: "veg"}
+	if got := pickPenaltyAdjustment(plain, favs, false); got != -12 {
+		t.Errorf("non-favorite = %d, want -12", got)
+	}
+	unfamiliar := models.Dish{Name: "大盘鸡", Category: "新疆菜", DishRole: "meat"}
+	if got := pickPenaltyAdjustment(unfamiliar, favs, false); got != -37 {
+		t.Errorf("unfamiliar category = %d, want -37", got)
+	}
+	uncategorized := models.Dish{Name: "随手菜", Category: "", DishRole: "veg"}
+	if got := pickPenaltyAdjustment(uncategorized, favs, false); got != -12 {
+		t.Errorf("empty category = %d, want -12 (no cuisine layer)", got)
+	}
+	slowSoup := models.Dish{Name: "莲藕排骨汤", Category: "家常菜", DishRole: "soup", CookTime: 90}
+	if got := pickPenaltyAdjustment(slowSoup, favs, false); got != -42 {
+		t.Errorf("weekday slow soup = %d, want -42 (-12 -30)", got)
+	}
+	if got := pickPenaltyAdjustment(slowSoup, favs, true); got != -12 {
+		t.Errorf("weekend slow soup = %d, want -12", got)
+	}
+	quickSoup := models.Dish{Name: "紫菜蛋花汤", Category: "家常菜", DishRole: "soup", CookTime: 8}
+	if got := pickPenaltyAdjustment(quickSoup, favs, false); got != -12 {
+		t.Errorf("weekday quick soup = %d, want -12 (no slow penalty)", got)
+	}
+}
+
+func TestSortTomorrowPoolPrefersFavorites(t *testing.T) {
+	favs := map[string]int{"家常菜": 1}
+	pool := []models.Dish{
+		{ID: 1, Name: "大盘鸡", Category: "新疆菜", DishRole: "meat", TraitSource: "manual", TraitVersion: models.DishTraitVersion},
+		{ID: 2, Name: "红烧肉", Category: "家常菜", Favorite: true, DishRole: "meat", TraitSource: "manual", TraitVersion: models.DishTraitVersion},
+	}
+	sortTomorrowPool(pool, "balanced", favs, false)
+	if pool[0].Name != "红烧肉" {
+		t.Fatalf("pool[0] = %s, want 红烧肉 (favorite of a familiar category first)", pool[0].Name)
 	}
 }
