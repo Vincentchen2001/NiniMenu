@@ -269,7 +269,17 @@ func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 	}
 
 	newPlan.Days[dayIndex] = ctx.generateDay(dayIndex, parsedDate, globalUsed, &weekPicked)
-	newPlan.Warnings = uniqueWarnings(append(append([]string{}, current.Warnings...), ctx.warnings...))
+	// Retire the target day's old warnings — they describe picks that no
+	// longer exist; cross-day and rule-compile warnings stay.
+	dayName := current.Days[dayIndex].DayName
+	keptWarnings := make([]string, 0, len(current.Warnings))
+	for _, warning := range current.Warnings {
+		if dayName != "" && strings.HasPrefix(warning, dayName) {
+			continue
+		}
+		keptWarnings = append(keptWarnings, warning)
+	}
+	newPlan.Warnings = uniqueWarnings(append(keptWarnings, ctx.warnings...))
 
 	if err := SaveWeekPlan(newPlan); err != nil {
 		return nil, err
@@ -407,6 +417,11 @@ func pickBestDishForSlot(pool []models.Dish, slot weekPlanSlot, dayCtx weekPlanD
 }
 
 func scoreWeekPlanCandidates(pool []models.Dish, slot weekPlanSlot, dayCtx weekPlanDayContext, quota MealQuota, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, stage weekPlanRelaxationStage, r *rand.Rand) []weekPlanCandidateScore {
+	profile := normalizePlanProfile(dayCtx.profile)
+	// 靓汤 themes are fulfilled by the dedicated soup slot; forcing meat/veg
+	// slots to match a soup profile would only burn the strict stages and
+	// emit misleading "口味画像" warnings on every soup day.
+	strictProfile := stage.strictProfile && !(profile == "soup" && slot != weekPlanSlotSoup)
 	var scores []weekPlanCandidateScore
 	for _, dish := range pool {
 		dish = ensureDishTraits(dish)
@@ -422,7 +437,7 @@ func scoreWeekPlanCandidates(pool []models.Dish, slot weekPlanSlot, dayCtx weekP
 		if !matchesWeekPlanSlot(dish, slot, stage.strictRole) {
 			continue
 		}
-		if stage.strictProfile && !matchesTomorrowProfile(dish, normalizePlanProfile(dayCtx.profile)) {
+		if strictProfile && !matchesTomorrowProfile(dish, profile) {
 			continue
 		}
 		allowed, _ := evaluateConstraintRules(dish, dayCtx.profile, quota, mealPicked, dayPicked, weekPicked, rules, stage.enforceSoft)
@@ -496,7 +511,7 @@ func evaluateConstraintRules(candidate models.Dish, profile string, quota MealQu
 		if item.rule.Relaxable && !enforceSoft {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, dayPicked, mealPicked)), profile, quota)
+		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked)), profile, quota)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
@@ -517,7 +532,7 @@ func evaluateScoreRules(candidate models.Dish, profile string, quota MealQuota, 
 		if item.rule.RuleKind != menuRuleKindScore {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, dayPicked, mealPicked)), profile, quota)
+		env := buildRuleEnv(dishRuleEnv(candidate), dishesRuleEnv(mealPicked), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked)), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked)), profile, quota)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue

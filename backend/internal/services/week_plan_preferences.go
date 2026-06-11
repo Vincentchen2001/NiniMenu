@@ -72,7 +72,10 @@ func SaveWeekPlanPreferences(prefs WeekPlanPreferences) error {
 		FirstOrCreate(&models.Setting{}).Error; err != nil {
 		return err
 	}
-	InvalidateWeekPlanCache()
+	// Deliberately NOT invalidating the cached week plan here: preference
+	// changes take effect on the next explicit regenerate (应用设置/重新生成),
+	// and 仅这天重生成 right after a day-theme save must keep working off
+	// the existing plan instead of silently rebuilding all seven days.
 	return nil
 }
 

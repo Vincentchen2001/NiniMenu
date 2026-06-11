@@ -785,6 +785,12 @@ func TestGenerateWeekPlanSoupDayAddsTempSoupSlot(t *testing.T) {
 			t.Fatalf("%s dinner soup = %d, want 0", day.DayName, soup)
 		}
 	}
+	// The soup theme is fulfilled by the dedicated soup slot; meat/veg slots
+	// must not emit "口味画像" relaxation warnings just because they cannot
+	// match a soup profile.
+	for _, warning := range plan.Warnings {
+		t.Errorf("soup-day generation should be warning-free, got: %s", warning)
+	}
 }
 
 func TestInvalidateWeekPlanCacheClearsStoredAndInMemoryCache(t *testing.T) {
@@ -1054,5 +1060,143 @@ func TestRegenerateWeekPlanDayOnlyChangesTargetDay(t *testing.T) {
 
 	if _, err := RegenerateWeekPlanDay("1999-01-01"); err == nil {
 		t.Errorf("RegenerateWeekPlanDay with unknown date should fail")
+	}
+}
+
+// The day-theme sheet saves preferences right before calling 仅这天重生成;
+// that save must not discard the cached plan the regeneration works from,
+// or the "regenerate one day" promise silently becomes "rebuild the week".
+func TestRegenerateWeekPlanDayAfterPrefsSaveKeepsOtherDays(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	t.Cleanup(InvalidateWeekPlanCache)
+
+	quota := WeekPlanPeriodPreferences{
+		Profile: "balanced",
+		Lunch:   MealQuota{MeatCount: 1, VegCount: 1},
+		Dinner:  MealQuota{MeatCount: 1},
+	}
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{Weekday: quota, Weekend: quota})
+
+	for i := 1; i <= 30; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("红烧肉%d", i), `["家常菜"]`, `[{"name":"五花肉","amount":"200g"}]`)
+		createDishForPlanTest(t, fmt.Sprintf("青菜%d", i), `["素菜"]`, `[{"name":"青菜","amount":"1把"}]`)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if err := SaveWeekPlan(plan); err != nil {
+		t.Fatalf("SaveWeekPlan() error = %v", err)
+	}
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{Weekday: quota, Weekend: quota})
+
+	before := make([][]uint, len(plan.Days))
+	for i, day := range plan.Days {
+		before[i] = weekDayDishIDs(day)
+	}
+	target := plan.Days[3].Date
+
+	updated, err := RegenerateWeekPlanDay(target)
+	if err != nil {
+		t.Fatalf("RegenerateWeekPlanDay(%q) error = %v", target, err)
+	}
+	for i, day := range updated.Days {
+		if i == 3 {
+			continue
+		}
+		if got := weekDayDishIDs(day); !equalUintSlices(got, before[i]) {
+			t.Errorf("day %d changed after prefs save + regenerate-day: before %v, after %v", i, before[i], got)
+		}
+	}
+}
+
+// Week-scope rules must see each picked dish exactly once: the same-day
+// lunch picks live in both dayPicked and weekPicked, and counting them
+// twice makes week caps fire one dish early.
+func TestWeekRuleEnvCountsSameDayDishesOnce(t *testing.T) {
+	setupPlanServiceTestDB(t)
+
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}, Dinner: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced"},
+	})
+	createDishForPlanTest(t, "红烧猪肉", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
+	createDishForPlanTest(t, "椒盐猪肉", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
+
+	rule := models.MenuRule{
+		Code:     "custom_rule_week_pork_cap",
+		Name:     "一周最多2道猪肉",
+		Enabled:  true,
+		Template: `{"type":"limit","scope":"week","category":"ingredient:猪肉","n":2,"strength":"must"}`,
+		Priority: 500,
+	}
+	if err := ApplyMenuRuleTemplate(&rule); err != nil {
+		t.Fatalf("ApplyMenuRuleTemplate() error = %v", err)
+	}
+	if err := database.DB.Create(&rule).Error; err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+
+	monday := plan.Days[0]
+	if len(monday.Lunch) != 1 || len(monday.Dinner) != 1 {
+		t.Fatalf("monday should fit both pork dishes under the n=2 week cap: lunch %d, dinner %d (warnings: %v)",
+			len(monday.Lunch), len(monday.Dinner), plan.Warnings)
+	}
+	if monday.Lunch[0].ID == monday.Dinner[0].ID {
+		t.Fatalf("monday picked the same dish twice: %+v", monday.Lunch[0])
+	}
+}
+
+// Regenerating a day must also retire that day's old warnings: they
+// describe picks that no longer exist.
+func TestRegenerateWeekPlanDayDropsStaleDayWarnings(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	t.Cleanup(InvalidateWeekPlanCache)
+
+	quota := WeekPlanPeriodPreferences{Profile: "balanced", Dinner: MealQuota{MeatCount: 1}}
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{Weekday: quota, Weekend: quota})
+
+	// 6 dishes for 7 dinner slots: sunday repeats one and carries a warning.
+	for i := 1; i <= 6; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("红烧肉%d", i), `["家常菜"]`, `[{"name":"五花肉","amount":"200g"}]`)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	hasSundayWarning := false
+	for _, warning := range plan.Warnings {
+		if strings.HasPrefix(warning, "周日") {
+			hasSundayWarning = true
+		}
+	}
+	if !hasSundayWarning {
+		t.Fatalf("test setup expects a sunday warning, got: %v", plan.Warnings)
+	}
+	if err := SaveWeekPlan(plan); err != nil {
+		t.Fatalf("SaveWeekPlan() error = %v", err)
+	}
+
+	// Refill the pool so the regenerated sunday can succeed cleanly.
+	for i := 7; i <= 16; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("红烧肉%d", i), `["家常菜"]`, `[{"name":"五花肉","amount":"200g"}]`)
+	}
+
+	updated, err := RegenerateWeekPlanDay(plan.Days[6].Date)
+	if err != nil {
+		t.Fatalf("RegenerateWeekPlanDay() error = %v", err)
+	}
+	for _, warning := range updated.Warnings {
+		if strings.HasPrefix(warning, "周日") {
+			t.Errorf("stale sunday warning survived regeneration: %s", warning)
+		}
 	}
 }
