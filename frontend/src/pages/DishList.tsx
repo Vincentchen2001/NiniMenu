@@ -303,7 +303,9 @@ export default function DishList() {
       />
 
       <div className="relative flex-1 min-h-0 overflow-hidden">
-        <div className="absolute inset-0 flex">
+        {/* Centered like every other page: the two-pane layout is phone-width
+            by design, so cap it at the app's 640px column on desktop. */}
+        <div className="absolute inset-0 mx-auto flex w-full max-w-[640px]">
           <div className="w-[76px] flex-shrink-0 bg-card border-r border-border overflow-y-hidden scrollbar-none">
             {sidebarCats.map((cat) => {
               const count = cat === "全部" ? enabledTotal : (categoryCountMap.get(cat) ?? 0)
