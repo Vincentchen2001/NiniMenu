@@ -164,12 +164,19 @@ func filterTomorrowPool(dishes []models.Dish, profile string, excluded map[uint]
 	return result
 }
 
+// isLightSoup reports whether a dish is a soup light enough for the 清淡
+// profile — rich stews (richness_level >= 2) no longer pass just because
+// their category contains 汤.
+func isLightSoup(d models.Dish) bool {
+	return (strings.Contains(d.Category, "汤") || isSoupDish(d)) && d.RichnessLevel <= 1
+}
+
 func matchesTomorrowProfile(d models.Dish, profile string) bool {
 	switch profile {
 	case "quick":
 		return d.Difficulty == "easy" || d.CookTime > 0 && d.CookTime <= 25 || strings.Contains(d.Category, "快手")
 	case "light":
-		return containsTaste(d.Taste, "清淡") || containsTaste(d.Taste, "鲜") || strings.Contains(d.Category, "汤")
+		return containsTaste(d.Taste, "清淡") || containsTaste(d.Taste, "鲜") || isLightSoup(d)
 	case "spicy":
 		return containsTaste(d.Taste, "辣") || strings.Contains(d.Category, "川菜") || strings.Contains(d.Category, "湘菜") || strings.Contains(d.Category, "贵州菜") || strings.Contains(d.Name, "辣")
 	case "favorite":
@@ -219,7 +226,7 @@ func tomorrowDishScore(d models.Dish, profile string) int {
 		if containsTaste(d.Taste, "鲜") {
 			score += 10
 		}
-		if strings.Contains(d.Category, "汤") {
+		if isLightSoup(d) {
 			score += 8
 		}
 	case "spicy":

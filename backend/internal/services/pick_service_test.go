@@ -26,3 +26,19 @@ func TestTomorrowProfileSoup(t *testing.T) {
 			tomorrowDishScore(soup, "soup"), tomorrowDishScore(stirFry, "soup"))
 	}
 }
+
+func TestLightProfileSoupRespectsRichness(t *testing.T) {
+	richSoup := models.Dish{Name: "猪肚鸡汤", Category: "汤品", Taste: "浓香", RichnessLevel: 2, DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	// 酸甜 taste matches no light keyword — only the soup clause can let it in.
+	clearSoup := models.Dish{Name: "番茄蛋花汤", Category: "汤品", Taste: "酸甜", RichnessLevel: 0, DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+
+	if matchesTomorrowProfile(richSoup, "light") {
+		t.Errorf("rich soup (richness 2) should not match light profile")
+	}
+	if !matchesTomorrowProfile(clearSoup, "light") {
+		t.Errorf("clear soup (richness 0) should match light profile")
+	}
+	if got, want := tomorrowDishScore(clearSoup, "light"), tomorrowDishScore(richSoup, "light"); got <= want {
+		t.Errorf("light score clear=%d rich=%d, want clear > rich", got, want)
+	}
+}
