@@ -383,7 +383,9 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
 	setupPlanServiceTestDB(t)
 
-	// Seed a v2-era database: the 9 v2 factory rules, one user-modified.
+	// Seed a v2-era database: the 9 v2 factory rules, one user-modified and
+	// one toggled off in the UI (factory expression/template, Enabled=false).
+	var factoryDoubleEggExpression, factoryDoubleEggTemplate string
 	for _, rule := range models.DefaultMenuRules() {
 		rule := rule
 		switch rule.Code {
@@ -394,9 +396,18 @@ func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
 			rule.Expression = `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
 			rule.Template = ""
 		}
+		if rule.Code == "avoid_double_egg" {
+			factoryDoubleEggExpression = rule.Expression
+			factoryDoubleEggTemplate = rule.Template
+		}
 		if err := database.DB.Create(&rule).Error; err != nil {
 			t.Fatalf("seed v2 rule %s: %v", rule.Code, err)
 		}
+	}
+	// Toggle one factory rule off the way the rules page does (column
+	// update); Create alone would lose Enabled=false to the gorm default.
+	if err := database.DB.Model(&models.MenuRule{}).Where("code = ?", "avoid_double_egg").Update("enabled", false).Error; err != nil {
+		t.Fatalf("disable avoid_double_egg: %v", err)
 	}
 	if err := setSettingValue("menu_rules_seed_version", "2"); err != nil {
 		t.Fatalf("set seed version: %v", err)
@@ -423,6 +434,26 @@ func TestEnsureDefaultMenuRulesMigratesV2ToV3(t *testing.T) {
 	if got["weekly_fried_limit"].Expression != wantModified {
 		t.Errorf("user-modified rule overwritten:\ngot:  %s\nwant: %s", got["weekly_fried_limit"].Expression, wantModified)
 	}
+
+	// The rule the user toggled off must survive the sync untouched.
+	var doubleEggCount int64
+	if err := database.DB.Model(&models.MenuRule{}).Where("code = ?", "avoid_double_egg").Count(&doubleEggCount).Error; err != nil {
+		t.Fatalf("count avoid_double_egg rows: %v", err)
+	}
+	if doubleEggCount != 1 {
+		t.Errorf("avoid_double_egg row count = %d, want 1", doubleEggCount)
+	}
+	disabled := got["avoid_double_egg"]
+	if disabled.Enabled {
+		t.Errorf("user-disabled avoid_double_egg was re-enabled by migration")
+	}
+	if disabled.Expression != factoryDoubleEggExpression {
+		t.Errorf("disabled rule expression changed:\ngot:  %s\nwant: %s", disabled.Expression, factoryDoubleEggExpression)
+	}
+	if disabled.Template != factoryDoubleEggTemplate {
+		t.Errorf("disabled rule template changed:\ngot:  %s\nwant: %s", disabled.Template, factoryDoubleEggTemplate)
+	}
+
 	var setting models.Setting
 	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
 		t.Fatalf("seed version setting missing: %v", err)

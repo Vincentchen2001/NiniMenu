@@ -130,8 +130,11 @@ func EnsureDefaultMenuRules() error {
 // syncDefaultMenuRules reconciles the rule table with the current factory
 // set: dropped v1 rules still at their factory expression are deleted,
 // missing default codes are inserted, and rows whose expression still
-// matches a factory variant are refreshed to the current definition.
-// User-modified rules are never touched.
+// matches a legacy factory variant (or lacks a template backfill) are
+// refreshed to the current definition. Rules whose expression was edited
+// by the user are never touched; rows refreshed from a legacy factory
+// variant keep their enabled state, and rows already at the current
+// definition are skipped entirely.
 func syncDefaultMenuRules() error {
 	for code, factoryExpression := range droppedMenuRuleExpressions {
 		var existing models.MenuRule
@@ -166,8 +169,14 @@ func syncDefaultMenuRules() error {
 			return err
 		}
 		if isFactoryMenuRuleExpression(rule.Code, existing.Expression) {
+			if strings.TrimSpace(existing.Expression) == strings.TrimSpace(rule.Expression) && existing.Template != "" {
+				// Already at the current definition: leave the row (and the
+				// user's enabled/name/priority tweaks) untouched.
+				continue
+			}
 			rule.ID = existing.ID
 			rule.CreatedAt = existing.CreatedAt
+			rule.Enabled = existing.Enabled
 			if err := database.DB.Save(&rule).Error; err != nil {
 				return err
 			}
