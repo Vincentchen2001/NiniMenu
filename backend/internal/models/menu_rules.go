@@ -206,5 +206,24 @@ func DefaultMenuRules() []MenuRule {
 			Priority:    300,
 			Message:     "汤主料与昨天重复降分",
 		},
+		// stale_repeat_penalty is the freshness decay: dishes seen (eaten or
+		// planned) within the past 14 days fade back in linearly instead of
+		// returning at full strength the moment the hard cooldown ends. The
+		// expression must stay byte-identical to staleRepeatExpression(points)
+		// in services/menu_rule_templates.go.
+		{
+			Code:        "stale_repeat_penalty",
+			Name:        "最近吃过的菜降分",
+			Description: "出了冷却的菜不立刻满血回归：距上次吃过或排进菜单越近降分越多，14 天后才完全恢复，让菜单跨周轮换不串台。",
+			Enabled:     true,
+			Scope:       "candidate",
+			RuleKind:    "score",
+			Severity:    "soft",
+			Relaxable:   true,
+			Expression:  `candidate.days_since_last >= 0 && candidate.days_since_last < 14 ? -(30.0 * (14 - candidate.days_since_last) / 14.0) : 0`,
+			Template:    `{"type":"avoid","scope":"meal","category":"stale_repeat","n":1,"points":30,"strength":"prefer"}`,
+			Priority:    310,
+			Message:     "最近吃过的菜降分",
+		},
 	}
 }

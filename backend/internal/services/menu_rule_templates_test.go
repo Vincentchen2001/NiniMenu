@@ -265,8 +265,8 @@ func TestMenuRuleTemplateNewCategoryPredicates(t *testing.T) {
 
 func TestDefaultMenuRuleTemplatesMatchExpressions(t *testing.T) {
 	defaults := models.DefaultMenuRules()
-	if len(defaults) != 14 {
-		t.Fatalf("DefaultMenuRules() has %d rules, want 14", len(defaults))
+	if len(defaults) != 15 {
+		t.Fatalf("DefaultMenuRules() has %d rules, want 15", len(defaults))
 	}
 	for _, rule := range defaults {
 		if rule.Template == "" {
@@ -343,6 +343,7 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 		"weekly_protein_variety", "weekly_fried_limit",
 		"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty",
 		"weekly_slow_soup_limit", "soup_ingredient_repeat_penalty",
+		"stale_repeat_penalty",
 	}
 	if len(rules) != len(wantCodes) {
 		t.Errorf("after migration %d rules, want %d (%v)", len(rules), len(wantCodes), got)
@@ -367,8 +368,8 @@ func TestEnsureDefaultMenuRulesMigratesV1Defaults(t *testing.T) {
 	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
 		t.Fatalf("seed version setting missing: %v", err)
 	}
-	if setting.Value != "4" {
-		t.Errorf("seed version = %q, want 4", setting.Value)
+	if setting.Value != "5" {
+		t.Errorf("seed version = %q, want 5", setting.Value)
 	}
 
 	if err := EnsureDefaultMenuRules(); err != nil {
@@ -424,12 +425,12 @@ func TestEnsureDefaultMenuRulesMigratesV2ToCurrent(t *testing.T) {
 		t.Fatalf("load rules: %v", err)
 	}
 	got := menuRuleCodeSet(rules)
-	if len(rules) != 14 {
-		t.Fatalf("after migration %d rules, want 14 (%v)", len(rules), got)
+	if len(rules) != 15 {
+		t.Fatalf("after migration %d rules, want 15 (%v)", len(rules), got)
 	}
-	for _, code := range []string{"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty", "weekly_slow_soup_limit", "soup_ingredient_repeat_penalty"} {
+	for _, code := range []string{"non_favorite_penalty", "unfamiliar_category_penalty", "weekday_slow_soup_penalty", "weekly_slow_soup_limit", "soup_ingredient_repeat_penalty", "stale_repeat_penalty"} {
 		if _, ok := got[code]; !ok {
-			t.Errorf("missing v3 rule %s after migration", code)
+			t.Errorf("missing v3/v5 rule %s after migration", code)
 		}
 	}
 	wantModified := `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
@@ -460,8 +461,8 @@ func TestEnsureDefaultMenuRulesMigratesV2ToCurrent(t *testing.T) {
 	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
 		t.Fatalf("seed version setting missing: %v", err)
 	}
-	if setting.Value != "4" {
-		t.Errorf("seed version = %q, want 4", setting.Value)
+	if setting.Value != "5" {
+		t.Errorf("seed version = %q, want 5", setting.Value)
 	}
 }
 
@@ -570,13 +571,13 @@ func TestCountOverlapPrevSoupHelper(t *testing.T) {
 func TestEnsureDefaultMenuRulesMigratesV3ToV4(t *testing.T) {
 	setupPlanServiceTestDB(t)
 
-	// Seed a v3-era database: all current defaults except the two v4
+	// Seed a v3-era database: all current defaults except the v4/v5
 	// additions, with one user-modified rule and one rule toggled off.
 	for _, rule := range models.DefaultMenuRules() {
 		rule := rule
 		switch rule.Code {
-		case "weekly_slow_soup_limit", "soup_ingredient_repeat_penalty":
-			continue // v4 additions don't exist in a v3 database
+		case "weekly_slow_soup_limit", "soup_ingredient_repeat_penalty", "stale_repeat_penalty":
+			continue // v4/v5 additions don't exist in a v3 database
 		}
 		if rule.Code == "weekly_fried_limit" {
 			rule.Expression = `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
@@ -604,12 +605,12 @@ func TestEnsureDefaultMenuRulesMigratesV3ToV4(t *testing.T) {
 		t.Fatalf("load rules: %v", err)
 	}
 	got := menuRuleCodeSet(rules)
-	if len(rules) != 14 {
-		t.Fatalf("after v4 migration %d rules, want 14 (%v)", len(rules), got)
+	if len(rules) != 15 {
+		t.Fatalf("after v3→v5 migration %d rules, want 15 (%v)", len(rules), got)
 	}
-	for _, code := range []string{"weekly_slow_soup_limit", "soup_ingredient_repeat_penalty"} {
+	for _, code := range []string{"weekly_slow_soup_limit", "soup_ingredient_repeat_penalty", "stale_repeat_penalty"} {
 		if _, ok := got[code]; !ok {
-			t.Errorf("missing v4 rule %s after migration", code)
+			t.Errorf("missing v4/v5 rule %s after migration", code)
 		}
 	}
 	wantModified := `has(candidate.cooking_methods, "deep_fry") && countWeek("cooking_methods", "deep_fry") >= 5 ? -20 : 0`
@@ -624,7 +625,98 @@ func TestEnsureDefaultMenuRulesMigratesV3ToV4(t *testing.T) {
 	if err := database.DB.Where("`key` = ?", "menu_rules_seed_version").First(&setting).Error; err != nil {
 		t.Fatalf("seed version setting missing: %v", err)
 	}
-	if setting.Value != "4" {
-		t.Errorf("seed version = %q, want 4", setting.Value)
+	if setting.Value != "5" {
+		t.Errorf("seed version = %q, want 5", setting.Value)
+	}
+}
+
+func TestMenuRuleTemplateStaleRepeat(t *testing.T) {
+	rule := models.MenuRule{Template: `{"type":"avoid","scope":"meal","category":"stale_repeat","n":1,"points":30,"strength":"prefer"}`}
+	if err := ApplyMenuRuleTemplate(&rule); err != nil {
+		t.Fatalf("ApplyMenuRuleTemplate() error = %v", err)
+	}
+	want := `candidate.days_since_last >= 0 && candidate.days_since_last < 14 ? -(30.0 * (14 - candidate.days_since_last) / 14.0) : 0`
+	if rule.Expression != want {
+		t.Errorf("expression = %s\nwant %s", rule.Expression, want)
+	}
+	if rule.RuleKind != "score" || rule.Severity != "soft" || !rule.Relaxable || rule.Scope != "candidate" {
+		t.Errorf("rendered meta mismatch: kind=%s severity=%s relaxable=%v scope=%s", rule.RuleKind, rule.Severity, rule.Relaxable, rule.Scope)
+	}
+
+	custom := models.MenuRule{Template: `{"type":"avoid","scope":"meal","category":"stale_repeat","n":1,"points":18,"strength":"prefer"}`}
+	if err := ApplyMenuRuleTemplate(&custom); err != nil {
+		t.Fatalf("ApplyMenuRuleTemplate() points=18 error = %v", err)
+	}
+	want18 := `candidate.days_since_last >= 0 && candidate.days_since_last < 14 ? -(18.0 * (14 - candidate.days_since_last) / 14.0) : 0`
+	if custom.Expression != want18 {
+		t.Errorf("points=18 expression = %s\nwant %s", custom.Expression, want18)
+	}
+
+	for _, tpl := range []string{
+		`{"type":"prefer","category":"stale_repeat"}`,
+		`{"type":"limit","scope":"week","category":"stale_repeat","n":2}`,
+	} {
+		bad := models.MenuRule{Template: tpl}
+		if err := ApplyMenuRuleTemplate(&bad); err == nil {
+			t.Errorf("template %s should be rejected（display-only 类别只支持 avoid）", tpl)
+		}
+	}
+}
+
+func TestEnsureDefaultMenuRulesAddsStaleRepeatPenalty(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	for _, rule := range models.DefaultMenuRules() {
+		if rule.Code == "stale_repeat_penalty" {
+			continue
+		}
+		rule := rule
+		if rule.Code == "non_favorite_penalty" {
+			rule.Expression = `!candidate.favorite ? -5 : 0` // 用户调过力度
+		}
+		if err := database.DB.Create(&rule).Error; err != nil {
+			t.Fatalf("seed v4 rule %s: %v", rule.Code, err)
+		}
+		// Create alone would lose Enabled=false to the gorm default — use a
+		// separate Update to persist the disabled state, same pattern as the
+		// other migration tests.
+		if rule.Code == "non_favorite_penalty" {
+			if err := database.DB.Model(&models.MenuRule{}).Where("code = ?", "non_favorite_penalty").Update("enabled", false).Error; err != nil {
+				t.Fatalf("disable non_favorite_penalty: %v", err)
+			}
+		}
+	}
+	if err := setSettingValue(menuRulesSeedVersionKey, "4"); err != nil {
+		t.Fatalf("set seed version: %v", err)
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("EnsureDefaultMenuRules() error = %v", err)
+	}
+
+	var stale models.MenuRule
+	if err := database.DB.Where("code = ?", "stale_repeat_penalty").First(&stale).Error; err != nil {
+		t.Fatalf("stale_repeat_penalty not inserted: %v", err)
+	}
+	if !stale.Enabled || stale.RuleKind != "score" || stale.Priority != 310 {
+		t.Errorf("unexpected stale rule row: enabled=%v kind=%s priority=%d", stale.Enabled, stale.RuleKind, stale.Priority)
+	}
+	if got := getSettingInt(menuRulesSeedVersionKey, 0); got != 5 {
+		t.Errorf("seed version = %d, want 5", got)
+	}
+	var modified models.MenuRule
+	if err := database.DB.Where("code = ?", "non_favorite_penalty").First(&modified).Error; err != nil {
+		t.Fatalf("non_favorite_penalty missing: %v", err)
+	}
+	if modified.Expression != `!candidate.favorite ? -5 : 0` || modified.Enabled {
+		t.Error("迁移动了用户改过的规则")
+	}
+
+	if err := EnsureDefaultMenuRules(); err != nil {
+		t.Fatalf("EnsureDefaultMenuRules() second run error = %v", err)
+	}
+	var count int64
+	database.DB.Model(&models.MenuRule{}).Where("code = ?", "stale_repeat_penalty").Count(&count)
+	if count != 1 {
+		t.Errorf("rerun 后 stale 规则数 = %d, want 1（幂等被破坏）", count)
 	}
 }

@@ -147,7 +147,29 @@ func (t MenuRuleTemplate) renderNoRepeat() (renderedMenuRule, error) {
 	}, nil
 }
 
+// staleRepeatExpression renders the freshness-decay penalty for a given
+// strength. Must stay byte-identical to the stale_repeat_penalty seed in
+// models.DefaultMenuRules — TestDefaultMenuRuleTemplatesMatchExpressions
+// locks the sync.
+func staleRepeatExpression(points int) string {
+	w := staleRepeatWindowDays
+	return fmt.Sprintf("candidate.days_since_last >= 0 && candidate.days_since_last < %d ? -(%d.0 * (%d - candidate.days_since_last) / %d.0) : 0", w, points, w, w)
+}
+
 func (t MenuRuleTemplate) renderPreference() (renderedMenuRule, error) {
+	if t.Category == "stale_repeat" {
+		if t.Type != "avoid" {
+			return renderedMenuRule{}, fmt.Errorf("规则模板类别无效: %s", t.Category)
+		}
+		return renderedMenuRule{
+			Expression: staleRepeatExpression(t.Points),
+			RuleKind:   menuRuleKindScore,
+			Severity:   "soft",
+			Relaxable:  true,
+			Scope:      "candidate",
+		}, nil
+	}
+
 	predicate, err := menuRuleCategoryPredicate(t.Category)
 	if err != nil {
 		return renderedMenuRule{}, err

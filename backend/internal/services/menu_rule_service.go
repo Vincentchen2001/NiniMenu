@@ -69,7 +69,7 @@ func ListMenuRules() ([]models.MenuRule, error) {
 
 const (
 	menuRulesSeedVersionKey = "menu_rules_seed_version"
-	menuRulesSeedVersion    = 4
+	menuRulesSeedVersion    = 5
 )
 
 // droppedMenuRuleExpressions lists pre-v2 default rules that no longer ship.
