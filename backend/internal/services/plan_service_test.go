@@ -1403,6 +1403,84 @@ func TestWeekRuleEnvCountsSameDayDishesOnce(t *testing.T) {
 	}
 }
 
+func TestUnionDishesByID(t *testing.T) {
+	a := models.Dish{ID: 1, Name: "甲"}
+	b := models.Dish{ID: 2, Name: "乙"}
+	c := models.Dish{ID: 3, Name: "丙"}
+
+	got := unionDishesByID([]models.Dish{a, b}, []models.Dish{b, c})
+	if len(got) != 3 || got[0].ID != 1 || got[1].ID != 2 || got[2].ID != 3 {
+		t.Fatalf("overlap union = %+v, want base order then new extras [1 2 3]", got)
+	}
+
+	got = unionDishesByID([]models.Dish{a}, []models.Dish{c})
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
+		t.Fatalf("disjoint union = %+v, want [1 3]", got)
+	}
+
+	// ID 0 = unsaved dish: never deduped, every occurrence counts.
+	got = unionDishesByID([]models.Dish{a, {ID: 0, Name: "未保存甲"}}, []models.Dish{{ID: 0, Name: "未保存乙"}, a})
+	if len(got) != 3 || got[2].Name != "未保存乙" {
+		t.Fatalf("ID-0 union = %+v, want both unsaved dishes kept and dish 1 deduped", got)
+	}
+
+	if got := unionDishesByID([]models.Dish{a}, nil); len(got) != 1 || got[0].ID != 1 {
+		t.Fatalf("nil extra should return base unchanged, got %+v", got)
+	}
+}
+
+// Keep (manual) dishes sit in mealPicked AND dayPicked/weekPicked while their
+// own meal is being filled (generateDay pre-registers them, pickQuotaDishes
+// seeds picked with them). The day/week rule envs must count them exactly
+// once, or day/week caps fire one dish early and `must` rules wrongly reject
+// legitimate candidates.
+func TestKeepDishCountedOnceInDayAndWeekRuleEnvs(t *testing.T) {
+	keep := models.Dish{ID: 11, Name: "点名红烧肉", DishRole: "meat",
+		Ingredients: `[{"name":"猪肉","amount":"200g"}]`,
+		TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	candidate := models.Dish{ID: 12, Name: "清炒青菜", DishRole: "veg",
+		Ingredients: `[{"name":"青菜","amount":"1把"}]`,
+		TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	dayCtx := weekPlanDayContext{profile: "balanced"}
+	meal := []models.Dish{keep}
+	day := []models.Dish{keep}
+	week := []models.Dish{keep}
+
+	// Score path: the expression returns the raw counts, so a double-counted
+	// keep dish shows up directly as -22 instead of -11.
+	scoreRule := models.MenuRule{
+		Code: "count_probe", Name: "count probe", Enabled: true,
+		Scope: "week", RuleKind: "score", Severity: "soft", Relaxable: true,
+		Expression: `countDay("ingredients", "猪肉") * -10 - countWeek("ingredients", "猪肉")`,
+	}
+	compiledScore, err := compileMenuRule(scoreRule)
+	if err != nil {
+		t.Fatalf("compile score rule: %v", err)
+	}
+	if got := evaluateScoreRules(candidate, dayCtx, MealQuota{}, meal, day, week, []compiledMenuRule{compiledScore}, true); got != -11 {
+		t.Fatalf("day/week count score = %v, want -11 (keep dish counted once per scope)", got)
+	}
+
+	// Constraint path: an n=2 week cap must still admit the second pork dish
+	// when only the keep dish is planned so far.
+	capRule := models.MenuRule{
+		Code: "week_pork_cap", Name: "一周最多2道猪肉", Enabled: true,
+		Scope: "week", RuleKind: "constraint", Severity: "hard", Relaxable: false,
+		Expression: `countWeek("ingredients", "猪肉") < 2`,
+	}
+	compiledCap, err := compileMenuRule(capRule)
+	if err != nil {
+		t.Fatalf("compile cap rule: %v", err)
+	}
+	porkCandidate := models.Dish{ID: 13, Name: "椒盐猪肉", DishRole: "meat",
+		Ingredients: `[{"name":"猪肉","amount":"200g"}]`,
+		TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	allowed, _ := evaluateConstraintRules(porkCandidate, dayCtx, MealQuota{}, meal, day, week, []compiledMenuRule{compiledCap}, true)
+	if !allowed {
+		t.Fatalf("n=2 week cap must allow the second pork dish: keep dish was double-counted")
+	}
+}
+
 // Regenerating a day must also retire that day's old warnings: they
 // describe picks that no longer exist.
 func TestRegenerateWeekPlanDayDropsStaleDayWarnings(t *testing.T) {

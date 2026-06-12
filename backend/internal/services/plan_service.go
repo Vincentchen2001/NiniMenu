@@ -673,7 +673,7 @@ func evaluateConstraintRules(candidate models.Dish, dayCtx weekPlanDayContext, q
 		if item.rule.Relaxable && !enforceSoft {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
@@ -694,7 +694,7 @@ func evaluateScoreRules(candidate models.Dish, dayCtx weekPlanDayContext, quota 
 		if item.rule.RuleKind != menuRuleKindScore {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(appendDishSlices(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
@@ -708,6 +708,33 @@ func evaluateScoreRules(candidate models.Dish, dayCtx weekPlanDayContext, quota 
 
 func exprRunRule(program *vm.Program, env map[string]any) (any, error) {
 	return expr.Run(program, env)
+}
+
+// unionDishesByID returns base plus the extra dishes whose ID is not already
+// present in base (order kept: base first, then new extras). The day/week
+// rule envs use it to merge the in-progress meal picks into the day/week
+// state without counting keep (manual) dishes twice — those sit in both sets
+// by design while their own meal is being filled. ID 0 means an unsaved dish
+// and never dedupes: distinct unsaved dishes must all count.
+func unionDishesByID(base []models.Dish, extra []models.Dish) []models.Dish {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[uint]bool, len(base))
+	for _, dish := range base {
+		if dish.ID != 0 {
+			seen[dish.ID] = true
+		}
+	}
+	result := make([]models.Dish, 0, len(base)+len(extra))
+	result = append(result, base...)
+	for _, dish := range extra {
+		if dish.ID != 0 && seen[dish.ID] {
+			continue
+		}
+		result = append(result, dish)
+	}
+	return result
 }
 
 func appendDishSlices(slices ...[]models.Dish) []models.Dish {
