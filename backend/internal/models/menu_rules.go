@@ -1,8 +1,9 @@
 package models
 
-// DefaultMenuRules is the factory rule set (seed version 4). Every rule
-// carries a sentence template; the Expression strings below are exactly what
-// the template renderer produces — a test asserts they never drift.
+// DefaultMenuRules is the factory rule set (current seed version lives in
+// services.menuRulesSeedVersion). Every rule carries a sentence template; the
+// Expression strings below are exactly what the template renderer produces —
+// a test asserts they never drift.
 func DefaultMenuRules() []MenuRule {
 	return []MenuRule{
 		{
