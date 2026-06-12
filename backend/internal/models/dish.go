@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"time"
 
@@ -52,10 +53,40 @@ func jsonField(s string) json.RawMessage {
 	return json.RawMessage("[]")
 }
 
-// UnmarshalJSON mirrors MarshalJSON: the plan JSON stores Images/Ingredients/…
-// as real JSON arrays (via the custom marshal alias), so when we round-trip
-// plan JSON back into Dish structs we must accept both a plain string and a
-// JSON array for those fields and store it back as the string form GORM uses.
+// normalizeJSONFieldText converts an incoming JSON value for one of the dish
+// TEXT fields into the array/object text the database stores. Raw arrays and
+// objects (MarshalJSON's output shape) are kept verbatim; a JSON string that
+// itself wraps array/object text (legacy payloads like "ingredients":"[…]")
+// is unwrapped first. Anything else — null, bare scalars, quoted garbage,
+// malformed text — falls back to "[]".
+func normalizeJSONFieldText(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "[]"
+	}
+	if trimmed[0] == '[' || trimmed[0] == '{' {
+		if json.Valid(trimmed) {
+			return string(trimmed)
+		}
+		return "[]"
+	}
+	if trimmed[0] == '"' {
+		var inner string
+		if json.Unmarshal(trimmed, &inner) == nil {
+			innerTrimmed := bytes.TrimSpace([]byte(inner))
+			if len(innerTrimmed) > 0 && (innerTrimmed[0] == '[' || innerTrimmed[0] == '{') && json.Valid(innerTrimmed) {
+				return string(innerTrimmed)
+			}
+		}
+	}
+	return "[]"
+}
+
+// UnmarshalJSON accepts dish JSON whose Images/Ingredients/… fields arrive as
+// real JSON arrays/objects (MarshalJSON's output) or as legacy quoted strings
+// wrapping such text, and normalizes both back to the TEXT form GORM stores.
+// It is deliberately not a strict inverse of MarshalJSON: unrecognized field
+// shapes fall back to "[]" instead of round-tripping verbatim.
 func (d *Dish) UnmarshalJSON(data []byte) error {
 	type alias Dish
 	aux := &struct {
@@ -72,19 +103,13 @@ func (d *Dish) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = Dish(aux.alias)
-	rawFieldStr := func(raw json.RawMessage) string {
-		if len(raw) == 0 {
-			return "[]"
-		}
-		return string(raw)
-	}
-	d.Images = rawFieldStr(aux.Images)
-	d.Ingredients = rawFieldStr(aux.Ingredients)
-	d.Seasonings = rawFieldStr(aux.Seasonings)
-	d.Steps = rawFieldStr(aux.Steps)
-	d.ProteinSources = rawFieldStr(aux.ProteinSources)
-	d.CookingMethods = rawFieldStr(aux.CookingMethods)
-	d.Tags = rawFieldStr(aux.Tags)
+	d.Images = normalizeJSONFieldText(aux.Images)
+	d.Ingredients = normalizeJSONFieldText(aux.Ingredients)
+	d.Seasonings = normalizeJSONFieldText(aux.Seasonings)
+	d.Steps = normalizeJSONFieldText(aux.Steps)
+	d.ProteinSources = normalizeJSONFieldText(aux.ProteinSources)
+	d.CookingMethods = normalizeJSONFieldText(aux.CookingMethods)
+	d.Tags = normalizeJSONFieldText(aux.Tags)
 	return nil
 }
 

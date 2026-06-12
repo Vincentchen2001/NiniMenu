@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
+	"sort"
 
 	"gorm.io/gorm"
 )
@@ -46,6 +47,8 @@ func SaveWeekPlan(plan *WeekPlan) error {
 // restorePastDaysFromStored swaps any day before today back to the stored
 // snapshot version (matched by date). History is read-only: a client PUT or
 // a full regenerate cannot rewrite what was planned on days already gone.
+// Past days the incoming plan omits entirely are merged back in (and the days
+// re-sorted by date), so a partial PUT cannot silently drop them either.
 // First-ever save of a week has no stored row, so nothing to restore.
 func restorePastDaysFromStored(plan *WeekPlan, weekStart string) {
 	today := todayKey()
@@ -61,13 +64,28 @@ func restorePastDaysFromStored(plan *WeekPlan, weekStart string) {
 	for _, day := range stored.Days {
 		storedByDate[day.Date] = day
 	}
+	planDates := make(map[string]bool, len(plan.Days))
 	for i, day := range plan.Days {
+		planDates[day.Date] = true
 		if day.Date >= today {
 			continue
 		}
 		if storedDay, exists := storedByDate[day.Date]; exists {
 			plan.Days[i] = storedDay
 		}
+	}
+	merged := false
+	for _, day := range stored.Days {
+		if day.Date == "" || day.Date >= today || planDates[day.Date] {
+			continue
+		}
+		plan.Days = append(plan.Days, day)
+		merged = true
+	}
+	if merged {
+		sort.SliceStable(plan.Days, func(i, j int) bool {
+			return plan.Days[i].Date < plan.Days[j].Date
+		})
 	}
 }
 

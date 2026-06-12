@@ -945,6 +945,85 @@ func TestSaveWeekPlanFreezesPastDaysAndTheirRecommendations(t *testing.T) {
 	}
 }
 
+func TestSaveWeekPlanMergesBackOmittedPastDays(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local)) // 周四，周一=2026-06-15
+
+	monDish := createDishForPlanTest(t, "周一存档菜", `["家常菜"]`, `[{"name":"白菜","amount":"1棵"}]`)
+	thuDish := createDishForPlanTest(t, "周四新菜", `["家常菜"]`, `[{"name":"豆腐","amount":"1块"}]`)
+
+	storedPlan := WeekPlan{Days: []WeekDayPlan{
+		{Date: "2026-06-15", DayName: "周一", Lunch: []models.Dish{monDish}, Dinner: []models.Dish{}},
+		{Date: "2026-06-18", DayName: "周四", Lunch: []models.Dish{}, Dinner: []models.Dish{}},
+	}}
+	storedJSON, _ := json.Marshal(storedPlan)
+	if err := database.DB.Create(&models.WeekPlanRecord{
+		UserID: CurrentUserID, WeekStart: "2026-06-15", PlanJSON: string(storedJSON),
+	}).Error; err != nil {
+		t.Fatalf("seed week row: %v", err)
+	}
+
+	// 客户端只提交周四，把过去的周一整段省略。
+	edited := &WeekPlan{Days: []WeekDayPlan{
+		{Date: "2026-06-18", DayName: "周四", Lunch: []models.Dish{thuDish}, Dinner: []models.Dish{}},
+	}}
+	if err := SaveWeekPlan(edited); err != nil {
+		t.Fatalf("SaveWeekPlan error = %v", err)
+	}
+
+	rec, ok := loadWeekPlanRecord("2026-06-15")
+	if !ok {
+		t.Fatalf("week row must exist after save")
+	}
+	var persisted WeekPlan
+	if err := json.Unmarshal([]byte(rec.PlanJSON), &persisted); err != nil {
+		t.Fatalf("unmarshal persisted plan: %v", err)
+	}
+	if len(persisted.Days) != 2 {
+		t.Fatalf("persisted day count = %d, want 2 (omitted past day merged back)", len(persisted.Days))
+	}
+	if persisted.Days[0].Date != "2026-06-15" || persisted.Days[1].Date != "2026-06-18" {
+		t.Fatalf("days must stay in date order, got %q, %q", persisted.Days[0].Date, persisted.Days[1].Date)
+	}
+	if len(persisted.Days[0].Lunch) != 1 || persisted.Days[0].Lunch[0].ID != monDish.ID {
+		t.Fatalf("omitted past Monday must keep the stored dishes, got %+v", persisted.Days[0].Lunch)
+	}
+	if len(persisted.Days[1].Lunch) != 1 || persisted.Days[1].Lunch[0].ID != thuDish.ID {
+		t.Fatalf("Thursday's edit must be saved, got %+v", persisted.Days[1].Lunch)
+	}
+}
+
+func TestGetCachedWeekPlanRegeneratesWhenPlanJSONEmpty(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local)) // 周一=2026-06-15
+
+	createDishForPlanTest(t, "可用菜一", `["家常菜"]`, `[{"name":"土豆","amount":"1个"}]`)
+	createDishForPlanTest(t, "可用菜二", `["素菜"]`, `[{"name":"青菜","amount":"1把"}]`)
+
+	// InvalidateWeekPlanCache 留下的形态：行还在（prefs 挂在上面），plan_json 为空。
+	if err := database.DB.Create(&models.WeekPlanRecord{
+		UserID:    CurrentUserID,
+		WeekStart: "2026-06-15",
+		PlanJSON:  "",
+		PrefsJSON: `{"week_want":["beef"]}`,
+	}).Error; err != nil {
+		t.Fatalf("seed prefs-only row: %v", err)
+	}
+
+	plan := GetCachedWeekPlan()
+	if plan == nil || len(plan.Days) == 0 {
+		t.Fatalf("prefs-only row must trigger regeneration, got %+v", plan)
+	}
+
+	rec, ok := loadWeekPlanRecord("2026-06-15")
+	if !ok || rec.PlanJSON == "" {
+		t.Fatalf("regenerated plan must be persisted back onto the row")
+	}
+	if rec.PrefsJSON != `{"week_want":["beef"]}` {
+		t.Fatalf("PrefsJSON = %q, must survive regeneration", rec.PrefsJSON)
+	}
+}
+
 func TestGetCachedWeekPlanReadsRowAndRollsOver(t *testing.T) {
 	setupPlanServiceTestDB(t)
 	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local)) // 本周一 2026-06-15
