@@ -38,6 +38,15 @@ type DayOverride struct {
 	Want    []string `json:"want,omitempty"`
 }
 
+// weekPlanOneOffPrefs is the per-week slice of the preferences: the "want"
+// wishes and day overrides only apply to one week and live on that week's
+// row (week_plans.prefs_json), so they reset naturally on rollover. The
+// resident quotas/profiles stay in the Setting row.
+type weekPlanOneOffPrefs struct {
+	WeekWant []string               `json:"week_want,omitempty"`
+	Days     map[string]DayOverride `json:"days,omitempty"`
+}
+
 var weekPlanDayKeys = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 var weekPlanProteinKeys = map[string]bool{
@@ -50,19 +59,40 @@ func (q MealQuota) total() int {
 }
 
 func GetWeekPlanPreferences() WeekPlanPreferences {
+	prefs := defaultWeekPlanPreferencesFromSettings()
 	var setting models.Setting
 	if err := database.DB.Where("`key` = ?", weekPlanPreferencesSettingKey).First(&setting).Error; err == nil && setting.Value != "" {
-		var prefs WeekPlanPreferences
-		if json.Unmarshal([]byte(setting.Value), &prefs) == nil {
-			return normalizeWeekPlanPreferences(prefs)
+		var stored WeekPlanPreferences
+		if json.Unmarshal([]byte(setting.Value), &stored) == nil {
+			prefs = stored
 		}
 	}
-	return defaultWeekPlanPreferencesFromSettings()
+	// One-off parts never come from the resident setting; they live on this
+	// week's row and reset when the week rolls over.
+	prefs.WeekWant = nil
+	prefs.Days = nil
+	if rec, ok := loadWeekPlanRecord(getCurrentWeekKey()); ok && rec.PrefsJSON != "" {
+		var oneOff weekPlanOneOffPrefs
+		if json.Unmarshal([]byte(rec.PrefsJSON), &oneOff) == nil {
+			prefs.WeekWant = oneOff.WeekWant
+			prefs.Days = oneOff.Days
+		}
+	}
+	return normalizeWeekPlanPreferences(prefs)
 }
 
 func SaveWeekPlanPreferences(prefs WeekPlanPreferences) error {
 	prefs = normalizeWeekPlanPreferences(prefs)
-	data, err := json.Marshal(prefs)
+
+	oneOffData, err := json.Marshal(weekPlanOneOffPrefs{WeekWant: prefs.WeekWant, Days: prefs.Days})
+	if err != nil {
+		return err
+	}
+
+	resident := prefs
+	resident.WeekWant = nil
+	resident.Days = nil
+	data, err := json.Marshal(resident)
 	if err != nil {
 		return err
 	}
@@ -70,6 +100,9 @@ func SaveWeekPlanPreferences(prefs WeekPlanPreferences) error {
 		Where("`key` = ?", weekPlanPreferencesSettingKey).
 		Assign(models.Setting{Key: weekPlanPreferencesSettingKey, Value: string(data)}).
 		FirstOrCreate(&models.Setting{}).Error; err != nil {
+		return err
+	}
+	if err := upsertWeekPlanRecordPrefs(getCurrentWeekKey(), string(oneOffData)); err != nil {
 		return err
 	}
 	// Deliberately NOT invalidating the cached week plan here: preference

@@ -3,7 +3,9 @@ package services
 import (
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestWeekPlanPreferencesDaysNormalization(t *testing.T) {
@@ -62,5 +64,76 @@ func TestSaveWeekPlanPreferencesRoundTripsDays(t *testing.T) {
 	}
 	if prefs.Days["fri"].Profile != "favorite" || len(prefs.Days["fri"].Want) != 1 {
 		t.Fatalf("friday override lost: %+v", prefs.Days["fri"])
+	}
+}
+
+func TestWeekPlanPreferencesOneOffPartsLiveOnWeekRow(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local)) // 周一=2026-06-15
+
+	prefs := WeekPlanPreferences{
+		Weekday:  WeekPlanPeriodPreferences{Profile: "quick", Lunch: MealQuota{MeatCount: 2}, Dinner: MealQuota{MeatCount: 1, SoupCount: 1}},
+		Weekend:  WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}, Dinner: MealQuota{MeatCount: 2}},
+		WeekWant: []string{"beef"},
+		Days:     map[string]DayOverride{"wed": {Want: []string{"seafood"}}},
+	}
+	if err := SaveWeekPlanPreferences(prefs); err != nil {
+		t.Fatalf("SaveWeekPlanPreferences error = %v", err)
+	}
+
+	// 常驻 Setting 里不得残留一次性字段。
+	var setting models.Setting
+	if err := database.DB.Where("`key` = ?", "week_plan_preferences").First(&setting).Error; err != nil {
+		t.Fatalf("resident setting missing: %v", err)
+	}
+	if strings.Contains(setting.Value, "week_want") || strings.Contains(setting.Value, `"days"`) {
+		t.Fatalf("resident setting must not contain one-off parts: %s", setting.Value)
+	}
+
+	// 一次性部分落在本周行。
+	rec, ok := loadWeekPlanRecord("2026-06-15")
+	if !ok || rec.PrefsJSON == "" {
+		t.Fatalf("one-off prefs must land on the week row, ok=%v", ok)
+	}
+	if !strings.Contains(rec.PrefsJSON, "beef") || !strings.Contains(rec.PrefsJSON, "seafood") {
+		t.Fatalf("PrefsJSON = %s, want want-lists", rec.PrefsJSON)
+	}
+
+	// 合成视图完整 round-trip。
+	got := GetWeekPlanPreferences()
+	if got.Weekday.Profile != "quick" || len(got.WeekWant) != 1 || got.WeekWant[0] != "beef" {
+		t.Fatalf("composed prefs = %+v", got)
+	}
+	if got.Days["wed"].Want[0] != "seafood" {
+		t.Fatalf("day override lost: %+v", got.Days)
+	}
+}
+
+func TestWeekPlanPreferencesOneOffPartsResetOnRollover(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local))
+
+	prefs := WeekPlanPreferences{
+		Weekday:  WeekPlanPeriodPreferences{Profile: "light", Lunch: MealQuota{VegCount: 2}, Dinner: MealQuota{MeatCount: 1}},
+		Weekend:  WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}, Dinner: MealQuota{MeatCount: 1}},
+		WeekWant: []string{"pork"},
+		Days:     map[string]DayOverride{"fri": {Profile: "soup"}},
+	}
+	if err := SaveWeekPlanPreferences(prefs); err != nil {
+		t.Fatalf("SaveWeekPlanPreferences error = %v", err)
+	}
+
+	// 翻篇到下周。
+	withPlanNow(t, time.Date(2026, 6, 23, 9, 0, 0, 0, time.Local))
+
+	got := GetWeekPlanPreferences()
+	if len(got.WeekWant) != 0 {
+		t.Fatalf("WeekWant must reset on rollover, got %v", got.WeekWant)
+	}
+	if len(got.Days) != 0 {
+		t.Fatalf("Days overrides must reset on rollover, got %+v", got.Days)
+	}
+	if got.Weekday.Profile != "light" || got.Weekday.Lunch.VegCount != 2 {
+		t.Fatalf("resident parts must survive rollover, got %+v", got.Weekday)
 	}
 }
