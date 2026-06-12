@@ -183,11 +183,20 @@ export interface WeekDayPlan {
   day_name: string
   lunch: Dish[]
   dinner: Dish[]
+  // 手动加进该餐的菜 ID；重生成时这些菜留在原位（后端按此保留）。
+  manual_lunch_ids?: number[]
+  manual_dinner_ids?: number[]
 }
 
 export interface WeekPlan {
   days: WeekDayPlan[]
   warnings?: string[]
+}
+
+export interface PlannedDishEntry {
+  dish_id: number
+  dish_name: string
+  meal_type: string
 }
 
 export type PlanProfile = "balanced" | "quick" | "light" | "spicy" | "favorite" | "soup"

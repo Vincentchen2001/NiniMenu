@@ -2,7 +2,7 @@ import { useState, useMemo } from "react"
 import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { recordsApi, statsApi, dayRatingApi, uploadApi, getUploadErrorMessage } from "@/api"
+import { recordsApi, statsApi, dayRatingApi, uploadApi, getUploadErrorMessage, weekPlanApi } from "@/api"
 import { useAuthStore } from "@/store/useAuthStore"
 import type { MealRecord, DayRating } from "@/types"
 import StatCard from "@/components/StatCard"
@@ -171,6 +171,12 @@ export default function History() {
   const { data: dayRatings = [] } = useQuery({
     queryKey: ["day-ratings", calYear, calMonth],
     queryFn: () => dayRatingApi.list({ date_from: monthStartKey, date_to: monthEndKey }),
+  })
+
+  const planMonthKey = `${calYear}-${String(calMonth + 1).padStart(2, "0")}`
+  const { data: plannedByDate = {} } = useQuery({
+    queryKey: ["week-plan-history", planMonthKey],
+    queryFn: () => weekPlanApi.history(planMonthKey),
   })
 
   const records = useMemo(() => recordsData?.items ?? [], [recordsData?.items])
@@ -427,6 +433,18 @@ export default function History() {
                 {dayRating?.mood ? "✓ 已评价" : "😌 评价"}
               </button>
             </div>
+            {selectedDateKey && (plannedByDate[selectedDateKey]?.length ?? 0) > 0 && (
+              <div className="px-4 py-2.5 border-b border-border">
+                <div className="text-[11px] text-text3 mb-1.5">当天排的菜单</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {plannedByDate[selectedDateKey].map((entry, i) => (
+                    <span key={`${entry.dish_id}-${i}`} className="text-[11px] font-medium bg-primary-light text-primary px-2 py-0.5 rounded-full">
+                      {entry.meal_type === "lunch" ? "午" : "晚"} · {entry.dish_name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {selectedRecords.length === 0 ? (
               <div className="py-5 px-4 text-center text-[13px] text-text3">{selectedDateKey === todayStr() ? "今天还没有记录哦~" : "这天没有记录"}</div>
             ) : (

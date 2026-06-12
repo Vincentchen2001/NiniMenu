@@ -850,22 +850,33 @@ export default function WeekPlan() {
   }
 
   function addDish(date: string, meal: MealType, dish: Dish) {
+    const manualKey: "manual_lunch_ids" | "manual_dinner_ids" = meal === "lunch" ? "manual_lunch_ids" : "manual_dinner_ids"
     setDraftPlan((prev) => ({
       warnings: prev.warnings,
       days: prev.days.map((day) => {
         if (day.date !== date) return day
-        return { ...day, [meal]: uniqueById([...day[meal], dish]) }
+        const manualIds = day[manualKey] || []
+        return {
+          ...day,
+          [meal]: uniqueById([...day[meal], dish]),
+          [manualKey]: manualIds.includes(dish.id) ? manualIds : [...manualIds, dish.id],
+        }
       }),
     }))
     setDirtyPlan(true)
   }
 
   function removeDish(date: string, meal: MealType, dishId: number) {
+    const manualKey: "manual_lunch_ids" | "manual_dinner_ids" = meal === "lunch" ? "manual_lunch_ids" : "manual_dinner_ids"
     setDraftPlan((prev) => ({
       warnings: prev.warnings,
       days: prev.days.map((day) => {
         if (day.date !== date) return day
-        return { ...day, [meal]: day[meal].filter((dish) => dish.id !== dishId) }
+        return {
+          ...day,
+          [meal]: day[meal].filter((dish) => dish.id !== dishId),
+          [manualKey]: (day[manualKey] || []).filter((id) => id !== dishId),
+        }
       }),
     }))
     setDirtyPlan(true)
