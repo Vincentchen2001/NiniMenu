@@ -21,6 +21,11 @@ func main() {
 	if err := services.EnsureDefaultMenuRules(); err != nil {
 		fmt.Printf("默认推荐规则初始化失败（首次访问时会重试）: %v\n", err)
 	}
+	// Moves the legacy week-plan cache/prefs Settings into week_plans rows;
+	// idempotent, worst failure case is regenerating the current week.
+	if err := services.MigrateWeekPlanStorage(); err != nil {
+		fmt.Printf("周菜单存储迁移失败: %v\n", err)
+	}
 
 	r := gin.Default()
 	routes.Setup(r)

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
@@ -62,4 +63,55 @@ func upsertWeekPlanRecordPrefs(weekStart string, prefsJSON string) error {
 		return err
 	}
 	return database.DB.Model(&rec).Update("prefs_json", prefsJSON).Error
+}
+
+// MigrateWeekPlanStorage moves the legacy single-slot Setting rows into the
+// per-week week_plans table. Idempotent: each legacy key is deleted (cache)
+// or stripped (prefs) after handling, so reruns are no-ops. Old weeks are NOT
+// backfilled — the legacy design already discarded them, so history starts
+// at the upgrade. Called from main at boot; a failure only warns because the
+// worst case is regenerating the current week.
+func MigrateWeekPlanStorage() error {
+	weekKey := getCurrentWeekKey()
+
+	var cacheSetting models.Setting
+	if err := database.DB.Where("`key` = ?", "week_plan_cache").First(&cacheSetting).Error; err == nil {
+		var plan WeekPlan
+		if cacheSetting.Value != "" && json.Unmarshal([]byte(cacheSetting.Value), &plan) == nil &&
+			len(plan.Days) > 0 && plan.Days[0].Date == weekKey {
+			if err := upsertWeekPlanRecordPlan(database.DB, weekKey, cacheSetting.Value); err != nil {
+				return err
+			}
+		}
+		if err := database.DB.Where("`key` = ?", "week_plan_cache").Delete(&models.Setting{}).Error; err != nil {
+			return err
+		}
+	}
+
+	var prefsSetting models.Setting
+	if err := database.DB.Where("`key` = ?", weekPlanPreferencesSettingKey).First(&prefsSetting).Error; err == nil && prefsSetting.Value != "" {
+		var prefs WeekPlanPreferences
+		if json.Unmarshal([]byte(prefsSetting.Value), &prefs) == nil &&
+			(len(prefs.WeekWant) > 0 || len(prefs.Days) > 0) {
+			oneOffData, err := json.Marshal(weekPlanOneOffPrefs{WeekWant: prefs.WeekWant, Days: prefs.Days})
+			if err != nil {
+				return err
+			}
+			if err := upsertWeekPlanRecordPrefs(weekKey, string(oneOffData)); err != nil {
+				return err
+			}
+			prefs.WeekWant = nil
+			prefs.Days = nil
+			residentData, err := json.Marshal(prefs)
+			if err != nil {
+				return err
+			}
+			if err := database.DB.Model(&models.Setting{}).
+				Where("`key` = ?", weekPlanPreferencesSettingKey).
+				Update("value", string(residentData)).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
