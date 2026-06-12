@@ -11,8 +11,27 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// resolveWeekParam maps ?week= to a week-start key. Absent/current → this
+// week, next → next week; anything else is a client error (false return,
+// response already written).
+func resolveWeekParam(c *gin.Context) (string, bool) {
+	switch c.Query("week") {
+	case "", "current":
+		return services.CurrentWeekStart(), true
+	case "next":
+		return services.NextWeekStart(), true
+	default:
+		utils.BadRequest(c, "week 参数无效（可选 current/next）")
+		return "", false
+	}
+}
+
 func GetWeekPlan(c *gin.Context) {
-	plan := services.GetCachedWeekPlan()
+	weekStart, ok := resolveWeekParam(c)
+	if !ok {
+		return
+	}
+	plan := services.GetWeekPlanForWeek(weekStart)
 	if plan != nil && len(plan.Days) > 0 {
 		services.RecordUniqueAchievementEvent("week_plan", plan.Days[0].Date)
 	}
@@ -20,7 +39,11 @@ func GetWeekPlan(c *gin.Context) {
 }
 
 func RegenerateWeekPlanHandler(c *gin.Context) {
-	plan := services.RegenerateWeekPlan()
+	weekStart, ok := resolveWeekParam(c)
+	if !ok {
+		return
+	}
+	plan := services.RegenerateWeekPlanForWeek(weekStart)
 	services.RecordAchievementEvent("week_plan", "")
 	utils.Success(c, plan)
 }
@@ -71,20 +94,28 @@ func SaveWeekPlanHandler(c *gin.Context) {
 }
 
 func GetWeekPlanPreferencesHandler(c *gin.Context) {
-	utils.Success(c, services.GetWeekPlanPreferences())
+	weekStart, ok := resolveWeekParam(c)
+	if !ok {
+		return
+	}
+	utils.Success(c, services.GetWeekPlanPreferencesForWeek(weekStart))
 }
 
 func UpdateWeekPlanPreferencesHandler(c *gin.Context) {
+	weekStart, ok := resolveWeekParam(c)
+	if !ok {
+		return
+	}
 	var prefs services.WeekPlanPreferences
 	if err := c.ShouldBindJSON(&prefs); err != nil {
 		utils.BadRequest(c, "参数无效")
 		return
 	}
-	if err := services.SaveWeekPlanPreferences(prefs); err != nil {
+	if err := services.SaveWeekPlanPreferencesForWeek(prefs, weekStart); err != nil {
 		utils.InternalError(c, "保存设置失败")
 		return
 	}
-	utils.Success(c, services.GetWeekPlanPreferences())
+	utils.Success(c, services.GetWeekPlanPreferencesForWeek(weekStart))
 }
 
 func GetWeekPlanRulesHandler(c *gin.Context) {
