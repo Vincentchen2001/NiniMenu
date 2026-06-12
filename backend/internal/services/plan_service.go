@@ -119,6 +119,7 @@ type weekPlanGenContext struct {
 	prefs             WeekPlanPreferences
 	rules             []compiledMenuRule
 	recent            map[uint]bool
+	lastSeen          map[uint]string
 	categoryFavorites map[string]int
 	warnings          []string
 	r                 *rand.Rand
@@ -170,6 +171,7 @@ func buildWeekPlanGenContext() *weekPlanGenContext {
 		prefs:             prefs,
 		rules:             compiledRules,
 		recent:            recentDishIDMap(RecommendationCooldownDays()),
+		lastSeen:          lastSeenDishDates(planNow()),
 		categoryFavorites: favoriteCategoryCounts(),
 		warnings:          warnings,
 		r:                 rand.New(rand.NewSource(time.Now().UnixNano())),
@@ -189,6 +191,7 @@ func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalU
 	dayCtx, lunchQuota, dinnerQuota := resolveWeekPlanDay(ctx.prefs, periodPrefs, dayIndex)
 	dayCtx.categoryFavorites = ctx.categoryFavorites
 	dayCtx.prevSoups = prevSoups
+	dayCtx.daysSince = daysSinceFor(date, ctx.lastSeen)
 	dayPlan := WeekDayPlan{
 		Date:   date.Format("2006-01-02"),
 		Lunch:  []models.Dish{},
@@ -452,6 +455,7 @@ type weekPlanDayContext struct {
 	isWeekend         bool
 	categoryFavorites map[string]int
 	prevSoups         []models.Dish
+	daysSince         map[uint]int
 }
 
 // resolveWeekPlanDay applies the per-day override for weekday index i
@@ -666,6 +670,10 @@ func baseWeekPlanDishScore(dish models.Dish, slot weekPlanSlot, dayCtx weekPlanD
 // enforceSoft=false stages; non-relaxable rules block at every stage,
 // regardless of severity.
 func evaluateConstraintRules(candidate models.Dish, dayCtx weekPlanDayContext, quota MealQuota, mealPicked []models.Dish, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, enforceSoft bool) (bool, string) {
+	candidateEnv := dishRuleEnv(candidate, dayCtx.categoryFavorites)
+	if d, ok := dayCtx.daysSince[candidate.ID]; ok {
+		candidateEnv.DaysSinceLast = d
+	}
 	for _, item := range rules {
 		if item.rule.RuleKind != menuRuleKindConstraint {
 			continue
@@ -673,7 +681,7 @@ func evaluateConstraintRules(candidate models.Dish, dayCtx weekPlanDayContext, q
 		if item.rule.Relaxable && !enforceSoft {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(candidateEnv, dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue
@@ -689,12 +697,16 @@ func evaluateScoreRules(candidate models.Dish, dayCtx weekPlanDayContext, quota 
 	if !enforceSoft {
 		return 0
 	}
+	candidateEnv := dishRuleEnv(candidate, dayCtx.categoryFavorites)
+	if d, ok := dayCtx.daysSince[candidate.ID]; ok {
+		candidateEnv.DaysSinceLast = d
+	}
 	total := 0.0
 	for _, item := range rules {
 		if item.rule.RuleKind != menuRuleKindScore {
 			continue
 		}
-		env := buildRuleEnv(dishRuleEnv(candidate, dayCtx.categoryFavorites), dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
+		env := buildRuleEnv(candidateEnv, dishesRuleEnv(mealPicked, dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(dayPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(unionDishesByID(weekPicked, mealPicked), dayCtx.categoryFavorites), dishesRuleEnv(dayCtx.prevSoups, dayCtx.categoryFavorites), dayCtx.profile, quota, dayCtx.isWeekend)
 		out, err := exprRunRule(item.program, env)
 		if err != nil {
 			continue

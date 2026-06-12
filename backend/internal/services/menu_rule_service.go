@@ -36,6 +36,7 @@ type ruleDishEnv struct {
 	Difficulty         string   `expr:"difficulty"`
 	Favorite           bool     `expr:"favorite"`
 	CategoryFavorites  int      `expr:"category_favorites"`
+	DaysSinceLast      int      `expr:"days_since_last"`
 	Tags               []string `expr:"tags"`
 	Ingredients        []string `expr:"ingredients"`
 }
@@ -361,6 +362,7 @@ func sampleRuleEnv() map[string]any {
 		CookingMethods:     []string{"stir_fry"},
 		Difficulty:         "easy",
 		CookTime:           20,
+		DaysSinceLast:      -1,
 		Tags:               []string{"家常菜"},
 		Ingredients:        []string{"鸡蛋"},
 	}
@@ -432,6 +434,7 @@ func dishRuleEnv(dish models.Dish, categoryFavorites map[string]int) ruleDishEnv
 		Difficulty:         dish.Difficulty,
 		Favorite:           dish.Favorite,
 		CategoryFavorites:  categoryFavorites[dish.Category],
+		DaysSinceLast:      -1,
 		Tags:               parseTags(dish.Tags),
 		Ingredients:        dishIngredientNames(dish.Ingredients),
 	}

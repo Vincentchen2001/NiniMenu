@@ -58,3 +58,50 @@ func mustCreate(t *testing.T, value any) {
 		t.Fatalf("create fixture %T: %v", value, err)
 	}
 }
+
+func TestEvaluateScoreRulesInjectsDaysSinceLast(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	rule := models.MenuRule{
+		Code: "test_days_since", Enabled: true, Scope: "candidate",
+		RuleKind: "score", Severity: "soft", Relaxable: true,
+		Expression: `candidate.days_since_last >= 0 && candidate.days_since_last < 14 ? -(28.0 * (14 - candidate.days_since_last) / 14.0) : 0`,
+	}
+	compiled, err := compileMenuRule(rule)
+	if err != nil {
+		t.Fatalf("compileMenuRule() error = %v", err)
+	}
+	rules := []compiledMenuRule{compiled}
+	dish := models.Dish{ID: 7, Name: "测试肉菜", Ingredients: "猪肉"}
+	dayCtx := weekPlanDayContext{daysSince: map[uint]int{7: 7}}
+
+	if got := evaluateScoreRules(dish, dayCtx, MealQuota{}, nil, nil, nil, rules, true); got != -14.0 {
+		t.Errorf("days=7 score = %v, want -14.0", got) // 28*(14-7)/14
+	}
+	if got := evaluateScoreRules(models.Dish{ID: 8, Name: "无记录菜", Ingredients: "牛肉"}, dayCtx, MealQuota{}, nil, nil, nil, rules, true); got != 0 {
+		t.Errorf("absent dish score = %v, want 0（env 默认 -1）", got)
+	}
+	if got := evaluateScoreRules(dish, dayCtx, MealQuota{}, nil, nil, nil, rules, false); got != 0 {
+		t.Errorf("enforceSoft=false score = %v, want 0（第 5 级放宽失效）", got)
+	}
+	if got := evaluateScoreRules(dish, weekPlanDayContext{}, MealQuota{}, nil, nil, nil, rules, true); got != 0 {
+		t.Errorf("nil daysSince map score = %v, want 0", got)
+	}
+}
+
+func TestEvaluateConstraintRulesSeesDaysSinceLast(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	rule := models.MenuRule{
+		Code: "test_days_constraint", Enabled: true, Scope: "candidate",
+		RuleKind: "constraint", Severity: "hard", Relaxable: false,
+		Expression: `candidate.days_since_last != 3`,
+	}
+	compiled, err := compileMenuRule(rule)
+	if err != nil {
+		t.Fatalf("compileMenuRule() error = %v", err)
+	}
+	dish := models.Dish{ID: 9, Name: "约束肉菜", Ingredients: "鸡肉"}
+	dayCtx := weekPlanDayContext{daysSince: map[uint]int{9: 3}}
+	if allowed, _ := evaluateConstraintRules(dish, dayCtx, MealQuota{}, nil, nil, nil, []compiledMenuRule{compiled}, true); allowed {
+		t.Error("d=3 的菜应被该约束拒绝（注入未生效）")
+	}
+}
