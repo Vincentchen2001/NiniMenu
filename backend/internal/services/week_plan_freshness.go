@@ -17,14 +17,32 @@ const (
 
 // lastSeenDishDates returns each dish's most recent appearance date
 // (meal_records ∪ dish_recommendations) within the decay window.
-// Recommendation rows are capped at today: future rows are the current
-// plan's tail, not something the family has eaten (same reasoning as
-// recentDishIDMap). now is injectable: week-plan callers pass planNow(),
-// the tomorrow pick passes planNow() as well (both default to the wall clock;
-// tests pin planNow via withPlanNow).
-func lastSeenDishDates(now time.Time) map[uint]string {
+//
+// The weekStart parameter controls the recommendation cap:
+//   - cap = max(today, weekStart-1)
+//   - Current-week generation keeps cap=today: future rows are the plan's own
+//     tail, not food the family has eaten; excluding them prevents the planner
+//     from penalising dishes it just scheduled.
+//   - Future-week generation raises the cap to weekStart-1: dishes planned for
+//     the current week's remaining days count as prior context, so a dish
+//     scheduled for this Sunday still carries a freshness penalty on next Monday.
+//   - A week's own rows are never included when generating it, because
+//     weekStart-1 < weekStart (the first day of that week).
+//
+// now is injectable: callers pass planNow(); tests pin it via withPlanNow.
+func lastSeenDishDates(now time.Time, weekStart string) map[uint]string {
 	today := now.Format("2006-01-02")
 	since := now.AddDate(0, 0, -(staleRepeatWindowDays - 1)).Format("2006-01-02")
+
+	// Raise the cap to weekStart-1 when generating for a future week so that
+	// the current week's planned tail counts as prior context.
+	capDate := today
+	if parsed, err := time.Parse("2006-01-02", weekStart); err == nil {
+		dayBefore := parsed.AddDate(0, 0, -1).Format("2006-01-02")
+		if dayBefore > today {
+			capDate = dayBefore
+		}
+	}
 
 	type lastSeenRow struct {
 		DishID   uint
@@ -53,7 +71,7 @@ func lastSeenDishDates(now time.Time) map[uint]string {
 	var planned []lastSeenRow
 	database.DB.Model(&models.DishRecommendation{}).
 		Select("dish_id, MAX(planned_date) AS last_date").
-		Where("planned_date >= ? AND planned_date <= ?", since, today).
+		Where("planned_date >= ? AND planned_date <= ?", since, capDate).
 		Group("dish_id").
 		Scan(&planned)
 	merge(result, planned)

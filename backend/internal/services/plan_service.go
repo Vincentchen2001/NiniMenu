@@ -42,14 +42,36 @@ var (
 )
 
 func getCurrentWeekKey() string {
+	return weekKeyWithOffset(0)
+}
+
+// weekKeyWithOffset returns the Monday key of the week `weeks` after the
+// current one (0 = this week, 1 = next week).
+func weekKeyWithOffset(weeks int) string {
 	now := planNow()
 	weekday := int(now.Weekday())
 	if weekday == 0 {
 		weekday = 7
 	}
-	monday := now.AddDate(0, 0, 1-weekday)
-	return monday.Format("2006-01-02")
+	return now.AddDate(0, 0, 1-weekday+7*weeks).Format("2006-01-02")
 }
+
+// mondayOf returns the Monday key of the week containing date.
+func mondayOf(date string) (string, error) {
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return "", err
+	}
+	weekday := int(parsed.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	return parsed.AddDate(0, 0, 1-weekday).Format("2006-01-02"), nil
+}
+
+// CurrentWeekStart and NextWeekStart are the handler-facing week addresses.
+func CurrentWeekStart() string { return weekKeyWithOffset(0) }
+func NextWeekStart() string    { return weekKeyWithOffset(1) }
 
 func getSettingInt(key string, defaultVal int) int {
 	var setting models.Setting
@@ -171,7 +193,7 @@ func buildWeekPlanGenContext() *weekPlanGenContext {
 		prefs:             prefs,
 		rules:             compiledRules,
 		recent:            recentDishIDMap(RecommendationCooldownDays()),
-		lastSeen:          lastSeenDishDates(planNow()),
+		lastSeen:          lastSeenDishDates(planNow(), getCurrentWeekKey()),
 		categoryFavorites: favoriteCategoryCounts(),
 		warnings:          warnings,
 		r:                 rand.New(rand.NewSource(time.Now().UnixNano())),

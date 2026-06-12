@@ -1905,3 +1905,42 @@ func TestDecayStillBitesWhenCooldownRelaxed(t *testing.T) {
 		t.Errorf("应出现「最近避重」放宽警告（文案含\"最近刚吃过\"），got %v", plan.Warnings)
 	}
 }
+
+func TestWeekKeyWithOffset(t *testing.T) {
+	// Wednesday 2026-06-10 → this Monday 2026-06-08, next Monday 2026-06-15.
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	if got := weekKeyWithOffset(0); got != "2026-06-08" {
+		t.Fatalf("offset 0: got %s", got)
+	}
+	if got := weekKeyWithOffset(1); got != "2026-06-15" {
+		t.Fatalf("offset 1: got %s", got)
+	}
+}
+
+func TestWeekKeyWithOffsetSundayEdge(t *testing.T) {
+	// Sunday 2026-06-14 still belongs to the 06-08 week.
+	withPlanNow(t, time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC))
+	if got := weekKeyWithOffset(0); got != "2026-06-08" {
+		t.Fatalf("offset 0 on Sunday: got %s", got)
+	}
+	if got := weekKeyWithOffset(1); got != "2026-06-15" {
+		t.Fatalf("offset 1 on Sunday: got %s", got)
+	}
+}
+
+func TestMondayOf(t *testing.T) {
+	cases := map[string]string{
+		"2026-06-15": "2026-06-15", // Monday → itself
+		"2026-06-21": "2026-06-15", // Sunday → that week's Monday
+		"2026-06-10": "2026-06-08",
+	}
+	for date, want := range cases {
+		got, err := mondayOf(date)
+		if err != nil || got != want {
+			t.Fatalf("mondayOf(%s) = %s, %v; want %s", date, got, err, want)
+		}
+	}
+	if _, err := mondayOf("not-a-date"); err == nil {
+		t.Fatal("mondayOf should reject garbage")
+	}
+}

@@ -133,7 +133,7 @@ func PickTomorrowDishes(opts TomorrowPickOptions) ([]models.Dish, error) {
 	}
 
 	tomorrow := planNow().AddDate(0, 0, 1)
-	daysSince := daysSinceFor(tomorrow, lastSeenDishDates(planNow()))
+	daysSince := daysSinceFor(tomorrow, lastSeenDishDates(planNow(), getCurrentWeekKey()))
 	sortTomorrowPool(pool, profile, favoriteCategoryCounts(), isWeekend(tomorrow), daysSince)
 	if len(pool) > count {
 		pool = pool[:count]

@@ -23,7 +23,7 @@ func TestLastSeenDishDatesMergesAndTrims(t *testing.T) {
 	// dish 5: 打卡在今天当天，必须包含（d=0 语义）
 	mustCreate(t, &models.MealRecord{DishID: 5, DishName: "E", MealType: "lunch", MealDate: "2026-06-08"})
 
-	got := lastSeenDishDates(now)
+	got := lastSeenDishDates(now, "2026-06-08")
 	want := map[uint]string{1: "2026-06-05", 4: "2026-05-26", 5: "2026-06-08"}
 	if len(got) != len(want) {
 		t.Fatalf("lastSeenDishDates() = %v, want %v", got, want)
@@ -56,6 +56,23 @@ func mustCreate(t *testing.T, value any) {
 	t.Helper()
 	if err := database.DB.Create(value).Error; err != nil {
 		t.Fatalf("create fixture %T: %v", value, err)
+	}
+}
+
+func TestLastSeenCapExtendsToWeekStartMinusOne(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) // Wednesday
+
+	// Dish 1 planned for this Sunday — future relative to today.
+	mustCreate(t, &models.DishRecommendation{DishID: 1, DishName: "周日菜", Source: "week_plan", MealType: "dinner", PlannedDate: "2026-06-14"})
+
+	// Current week: cap = today → future tail invisible (unchanged behavior).
+	if got := lastSeenDishDates(now, "2026-06-08"); got[1] != "" {
+		t.Fatalf("current-week cap should exclude future rows, got %v", got)
+	}
+	// Next week: cap = 2026-06-14 (weekStart-1) → this week's tail counts.
+	if got := lastSeenDishDates(now, "2026-06-15"); got[1] != "2026-06-14" {
+		t.Fatalf("next-week cap should include this week's tail, got %v", got)
 	}
 }
 
