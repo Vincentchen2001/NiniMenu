@@ -308,12 +308,15 @@ func favoriteCategoryCounts() map[string]int {
 	return result
 }
 
+// recentDishIDMap reads the clock through planNow so the cooldown window and
+// the rest of the week-plan date logic share one injectable clock (tests pin
+// it via withPlanNow).
 func recentDishIDMap(days int) map[uint]bool {
 	if days <= 0 {
 		return map[uint]bool{}
 	}
-	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
-	today := time.Now().Format("2006-01-02")
+	since := planNow().AddDate(0, 0, -days).Format("2006-01-02")
+	today := planNow().Format("2006-01-02")
 	// Pluck into separate slices: GORM resets the destination slice on each
 	// query, so reusing one slice would drop the earlier results.
 	var eatenIDs, recommendedIDs []uint

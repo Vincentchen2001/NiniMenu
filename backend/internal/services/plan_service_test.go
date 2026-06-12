@@ -1852,6 +1852,7 @@ func TestGenerateWeekPlanDecayExpiresAtWindow(t *testing.T) {
 	a := createDishForPlanTest(t, "对照鸡块A", "", "鸡肉")
 	b := createDishForPlanTest(t, "对照鸡块B", "", "鸡肉")
 	// A 十四天前（2026-05-25）：已出窗口，零惩罚；B 五天前：-19.3
+	// A 在 lastSeen 查询下界（today-13）之外，整行被裁掉 → 零惩罚；表达式自身的 < 14 边界由模板/表达式测试锁定
 	mustCreate(t, &models.MealRecord{DishID: a.ID, DishName: a.Name, MealType: "dinner", MealDate: "2026-05-25"})
 	mustCreate(t, &models.MealRecord{DishID: b.ID, DishName: b.Name, MealType: "dinner", MealDate: "2026-06-03"})
 	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
@@ -1873,8 +1874,9 @@ func TestDecayStillBitesWhenCooldownRelaxed(t *testing.T) {
 	withPlanNow(t, time.Date(2026, 6, 8, 9, 0, 0, 0, time.Local)) // 周一
 	a := createDishForPlanTest(t, "放宽鸡块A", "", "鸡肉")
 	b := createDishForPlanTest(t, "放宽鸡块B", "", "鸡肉")
-	// 两道都在 3 天冷却内 → 第 1 级无候选 → 第 2 级放弃"最近避重"。
-	// 旧行为：放宽后两道菜零惩罚平等竞争；新行为：衰减仍在，d=0 (-30) 输给 d=2 (-25.7)。
+	// 两道都在 3 天冷却内（钉死的钟下窗口为 [2026-06-05, 2026-06-08]）：
+	// 第 1 级无候选 → 放宽到第 2 级（放弃「最近避重」）；衰减仍在。
+	// 旧行为：放宽后两道菜零惩罚平等竞争；新行为：d=0 (-30) 输给 d=2 (-25.7)。
 	mustCreate(t, &models.DishRecommendation{DishID: a.ID, DishName: a.Name, Source: "week_plan", MealType: "lunch", PlannedDate: "2026-06-08"})
 	mustCreate(t, &models.DishRecommendation{DishID: b.ID, DishName: b.Name, Source: "week_plan", MealType: "lunch", PlannedDate: "2026-06-06"})
 	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
@@ -1888,5 +1890,18 @@ func TestDecayStillBitesWhenCooldownRelaxed(t *testing.T) {
 	}
 	if len(plan.Days[0].Lunch) != 1 || plan.Days[0].Lunch[0].ID != b.ID {
 		t.Errorf("冷却放宽后应选 d=2 的 B 而非 d=0 的 A，got %+v", plan.Days[0].Lunch)
+	}
+	// 锁住「最近避重」放宽真的发生过：该级让步经 relaxationWarning 译成
+	// "……不够选，安排了一道最近刚吃过的菜" 进入 warnings（stage label
+	// 「最近避重」本身不会出现在文案里）。
+	sawRecentRelaxation := false
+	for _, w := range plan.Warnings {
+		if strings.Contains(w, "最近刚吃过") {
+			sawRecentRelaxation = true
+			break
+		}
+	}
+	if !sawRecentRelaxation {
+		t.Errorf("应出现「最近避重」放宽警告（文案含\"最近刚吃过\"），got %v", plan.Warnings)
 	}
 }
