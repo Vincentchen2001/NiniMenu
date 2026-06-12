@@ -37,7 +37,7 @@ var (
 )
 
 func getCurrentWeekKey() string {
-	now := time.Now()
+	now := planNow()
 	weekday := int(now.Weekday())
 	if weekday == 0 {
 		weekday = 7
@@ -209,7 +209,7 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		return &WeekPlan{}, nil
 	}
 
-	now := time.Now()
+	now := planNow()
 	weekday := int(now.Weekday())
 	if weekday == 0 {
 		weekday = 7

@@ -21,7 +21,7 @@ func setupPlanServiceTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Dish{}, &models.Setting{}, &models.MealRecord{}, &models.DishRecommendation{}, &models.MenuRule{}); err != nil {
+	if err := db.AutoMigrate(&models.Dish{}, &models.Setting{}, &models.MealRecord{}, &models.DishRecommendation{}, &models.WeekPlanRecord{}, &models.MenuRule{}); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
 

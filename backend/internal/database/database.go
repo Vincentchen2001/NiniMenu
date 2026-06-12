@@ -42,6 +42,7 @@ func Init() error {
 		&models.Holiday{},
 		&models.Setting{},
 		&models.DishRecommendation{},
+		&models.WeekPlanRecord{},
 		&models.MenuRule{},
 		&models.DayRating{},
 		&models.ShoppingCheck{},
