@@ -665,7 +665,7 @@ export default function WeekPlan() {
   const [picker, setPicker] = useState<{ date: string; meal: MealType } | null>(null)
   const [themeSheet, setThemeSheet] = useState<string | null>(null)
   const [comboOpen, setComboOpen] = useState(false)
-  const [weekSwitchHint, setWeekSwitchHint] = useState(false)
+  const [weekSwitchHint, setWeekSwitchHint] = useState<string | null>(null)
 
   const { data: serverPlan, isLoading: planLoading } = useQuery({
     queryKey: ["week-plan", viewWeek],
@@ -697,6 +697,12 @@ export default function WeekPlan() {
       cancelled = true
     }
   }, [dirtyPrefs, serverPrefs])
+
+  useEffect(() => {
+    if (!weekSwitchHint) return
+    const timer = window.setTimeout(() => setWeekSwitchHint(null), 2800)
+    return () => window.clearTimeout(timer)
+  }, [weekSwitchHint])
 
   const activePickerDay = picker ? draftPlan.days.find((day) => day.date === picker.date) : null
   const selectedIds = useMemo(() => {
@@ -789,9 +795,12 @@ export default function WeekPlan() {
 
   function switchWeek(week: WeekPlanWeek) {
     if (week === viewWeek) return
+    if (busy) {
+      setWeekSwitchHint("操作进行中，请稍候再切换周")
+      return
+    }
     if (dirtyPlan || dirtyPrefs) {
-      setWeekSwitchHint(true)
-      window.setTimeout(() => setWeekSwitchHint(false), 2800)
+      setWeekSwitchHint("请先保存或放弃当前修改，再切换周")
       return
     }
     setViewWeek(week)
@@ -981,7 +990,7 @@ export default function WeekPlan() {
           </div>
           {weekSwitchHint && (
             <div className="mt-2 text-[12px] font-semibold text-primary">
-              请先保存或放弃当前修改，再切换周
+              {weekSwitchHint}
             </div>
           )}
         </div>
