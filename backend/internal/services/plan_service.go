@@ -67,37 +67,37 @@ func GetCachedWeekPlan() *WeekPlan {
 	}
 	planMu.RUnlock()
 
-	var setting models.Setting
-	if err := database.DB.Where("`key` = ?", "week_plan_cache").First(&setting).Error; err == nil && setting.Value != "" {
+	if rec, ok := loadWeekPlanRecord(weekKey); ok && rec.PlanJSON != "" {
 		var plan WeekPlan
-		if json.Unmarshal([]byte(setting.Value), &plan) == nil && len(plan.Days) > 0 {
-			if plan.Days[0].Date >= weekKey {
-				planMu.Lock()
-				cachedPlan = &plan
-				cachedWeekKey = weekKey
-				planMu.Unlock()
-				return &plan
-			}
+		if json.Unmarshal([]byte(rec.PlanJSON), &plan) == nil && len(plan.Days) > 0 {
+			planMu.Lock()
+			cachedPlan = &plan
+			cachedWeekKey = weekKey
+			planMu.Unlock()
+			return &plan
 		}
+		// 解析失败按"未生成"处理，重新生成覆盖。
+		fmt.Printf("本周菜单存档解析失败，将重新生成（week_start=%s）\n", weekKey)
 	}
 
 	plan, _ := GenerateWeekPlan()
-	saveWeekPlanCache(plan)
+	_ = SaveWeekPlan(plan)
 	return plan
 }
 
 func RegenerateWeekPlan() *WeekPlan {
 	plan, _ := GenerateWeekPlan()
-	saveWeekPlanCache(plan)
+	_ = SaveWeekPlan(plan)
 	return plan
 }
 
-func saveWeekPlanCache(plan *WeekPlan) {
-	_ = SaveWeekPlan(plan)
-}
-
+// InvalidateWeekPlanCache clears the current week's generated plan so the
+// next read regenerates it. The row itself stays (one-off prefs live on it),
+// and past weeks are never touched.
 func InvalidateWeekPlanCache() {
-	database.DB.Where("`key` = ?", "week_plan_cache").Delete(&models.Setting{})
+	database.DB.Model(&models.WeekPlanRecord{}).
+		Where("user_id = ? AND week_start = ?", CurrentUserID, getCurrentWeekKey()).
+		Update("plan_json", "")
 	planMu.Lock()
 	cachedPlan = nil
 	cachedWeekKey = ""

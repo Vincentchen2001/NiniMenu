@@ -10,21 +10,25 @@ import (
 
 const recommendationSourceWeekPlan = "week_plan"
 
+// SaveWeekPlan persists the plan as this week's snapshot row and refreshes
+// the flat recommendation rows. Two freeze guards live here so EVERY write
+// path (generation, regeneration, manual edit PUT) honours read-only history:
+// restorePastDaysFromStored swaps days before today back to the stored
+// version, and replaceWeekPlanRecommendations never touches past rows.
 func SaveWeekPlan(plan *WeekPlan) error {
 	if plan == nil {
 		plan = &WeekPlan{Days: []WeekDayPlan{}}
 	}
 	normalizeWeekPlan(plan)
+	weekKey := getCurrentWeekKey()
+	restorePastDaysFromStored(plan, weekKey)
 	data, err := json.Marshal(plan)
 	if err != nil {
 		return err
 	}
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.Setting{}).
-			Where("`key` = ?", "week_plan_cache").
-			Assign(models.Setting{Key: "week_plan_cache", Value: string(data)}).
-			FirstOrCreate(&models.Setting{}).Error; err != nil {
+		if err := upsertWeekPlanRecordPlan(tx, weekKey, string(data)); err != nil {
 			return err
 		}
 		return replaceWeekPlanRecommendations(tx, plan)
@@ -34,9 +38,37 @@ func SaveWeekPlan(plan *WeekPlan) error {
 
 	planMu.Lock()
 	cachedPlan = plan
-	cachedWeekKey = getCurrentWeekKey()
+	cachedWeekKey = weekKey
 	planMu.Unlock()
 	return nil
+}
+
+// restorePastDaysFromStored swaps any day before today back to the stored
+// snapshot version (matched by date). History is read-only: a client PUT or
+// a full regenerate cannot rewrite what was planned on days already gone.
+// First-ever save of a week has no stored row, so nothing to restore.
+func restorePastDaysFromStored(plan *WeekPlan, weekStart string) {
+	today := todayKey()
+	rec, ok := loadWeekPlanRecord(weekStart)
+	if !ok || rec.PlanJSON == "" {
+		return
+	}
+	var stored WeekPlan
+	if json.Unmarshal([]byte(rec.PlanJSON), &stored) != nil {
+		return
+	}
+	storedByDate := make(map[string]WeekDayPlan, len(stored.Days))
+	for _, day := range stored.Days {
+		storedByDate[day.Date] = day
+	}
+	for i, day := range plan.Days {
+		if day.Date >= today {
+			continue
+		}
+		if storedDay, exists := storedByDate[day.Date]; exists {
+			plan.Days[i] = storedDay
+		}
+	}
 }
 
 func normalizeWeekPlan(plan *WeekPlan) {
@@ -50,11 +82,15 @@ func normalizeWeekPlan(plan *WeekPlan) {
 	}
 }
 
+// replaceWeekPlanRecommendations refreshes the flat rows for today and later
+// only. Past rows are immutable history — the cooldown window and the History
+// page rely on them recording what was actually planned at the time.
 func replaceWeekPlanRecommendations(tx *gorm.DB, plan *WeekPlan) error {
+	today := todayKey()
 	dates := make([]string, 0, len(plan.Days))
 	seenDates := make(map[string]bool, len(plan.Days))
 	for _, day := range plan.Days {
-		if day.Date == "" || seenDates[day.Date] {
+		if day.Date == "" || day.Date < today || seenDates[day.Date] {
 			continue
 		}
 		seenDates[day.Date] = true
@@ -70,6 +106,9 @@ func replaceWeekPlanRecommendations(tx *gorm.DB, plan *WeekPlan) error {
 
 	var records []models.DishRecommendation
 	for _, day := range plan.Days {
+		if day.Date == "" || day.Date < today {
+			continue
+		}
 		records = append(records, dishRecommendationsForMeal(day.Date, "lunch", day.Lunch)...)
 		records = append(records, dishRecommendationsForMeal(day.Date, "dinner", day.Dinner)...)
 	}

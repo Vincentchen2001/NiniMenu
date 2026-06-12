@@ -52,6 +52,42 @@ func jsonField(s string) json.RawMessage {
 	return json.RawMessage("[]")
 }
 
+// UnmarshalJSON mirrors MarshalJSON: the plan JSON stores Images/Ingredients/…
+// as real JSON arrays (via the custom marshal alias), so when we round-trip
+// plan JSON back into Dish structs we must accept both a plain string and a
+// JSON array for those fields and store it back as the string form GORM uses.
+func (d *Dish) UnmarshalJSON(data []byte) error {
+	type alias Dish
+	aux := &struct {
+		alias
+		Images         json.RawMessage `json:"images"`
+		Ingredients    json.RawMessage `json:"ingredients"`
+		Seasonings     json.RawMessage `json:"seasonings"`
+		Steps          json.RawMessage `json:"steps"`
+		ProteinSources json.RawMessage `json:"protein_sources"`
+		CookingMethods json.RawMessage `json:"cooking_methods"`
+		Tags           json.RawMessage `json:"tags"`
+	}{}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	*d = Dish(aux.alias)
+	rawFieldStr := func(raw json.RawMessage) string {
+		if len(raw) == 0 {
+			return "[]"
+		}
+		return string(raw)
+	}
+	d.Images = rawFieldStr(aux.Images)
+	d.Ingredients = rawFieldStr(aux.Ingredients)
+	d.Seasonings = rawFieldStr(aux.Seasonings)
+	d.Steps = rawFieldStr(aux.Steps)
+	d.ProteinSources = rawFieldStr(aux.ProteinSources)
+	d.CookingMethods = rawFieldStr(aux.CookingMethods)
+	d.Tags = rawFieldStr(aux.Tags)
+	return nil
+}
+
 // MarshalJSON 让 images/ingredients/seasonings/steps/tags 等 JSON 字符串字段在 API 响应中
 // 输出为真正的 JSON 数组/对象，而不是被转义的字符串。数据库仍以 TEXT 存储，写入路径不变。
 func (d Dish) MarshalJSON() ([]byte, error) {
