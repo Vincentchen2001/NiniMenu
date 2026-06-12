@@ -49,6 +49,7 @@ const DISPLAY_ONLY_CATEGORY_LABELS: Record<string, string> = {
   weekday_slow_soup: "工作日的费时汤",
   slow_soup: "费时汤（炖煮超45分钟）",
   soup_ingredient_repeat: "和昨天的汤撞主料的汤",
+  stale_repeat: "最近吃过的菜",
 }
 
 export const CATEGORY_OPTIONS: Array<{ key: string; label: string }> = [
