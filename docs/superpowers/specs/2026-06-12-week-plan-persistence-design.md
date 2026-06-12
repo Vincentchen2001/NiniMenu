@@ -147,7 +147,7 @@ type WeekDayPlan struct {
 
 ### 7.2 不变的路径
 
-- 购物清单：继续从当前周计划取数（读取入口同 §5.1）。
+- 购物清单：数据源是打卡时生成的 ShoppingCheck 行（与周计划存储无耦合，实施中核实），零改动。
 - 冷却 `recentDishIDMap`：继续读 `DishRecommendation`，零改动。
 - 前端 API 形状：GET/PUT /week-plan、preferences 端点的 JSON 结构向后兼容（新字段全部可选）。
 
@@ -172,7 +172,7 @@ type WeekDayPlan struct {
 5. **手动菜幸存**：手动加菜 → 整周重生成 → 该菜原位保留、该槽系统补位数=配额−1；手动菜计入周内去重与周级规则计数。
 6. **偏好按周**：设置 WeekWant/Days → 翻篇 → 新周读出为空；常驻配额不受影响；偏好先于计划写入（行先建、PlanJSON 空）→ 后续生成正常落位。
 7. **回看端点**：按月返回计划行；删菜后 dish_name 兜底；month 非法 400。
-8. **回归**：购物清单仍出数；冷却窗口跨周界时正确避开上周末的菜；`go test ./...` 与 `npm run build` 全绿。
+8. **回归**：冷却窗口跨周界时正确避开上周末的菜（读侧零改动，由现有 recentDishIDMap 测试覆盖）；`go test ./...` 与 `npm run build` 全绿。
 
 ## 10. 范围外
 
