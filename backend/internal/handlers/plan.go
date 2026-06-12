@@ -43,6 +43,15 @@ func RegenerateWeekPlanDayHandler(c *gin.Context) {
 	utils.Success(c, plan)
 }
 
+func GetWeekPlanHistoryHandler(c *gin.Context) {
+	history, err := services.WeekPlanHistoryByMonth(c.Query("month"))
+	if err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+	utils.Success(c, history)
+}
+
 func SaveWeekPlanHandler(c *gin.Context) {
 	var plan services.WeekPlan
 	if err := c.ShouldBindJSON(&plan); err != nil {

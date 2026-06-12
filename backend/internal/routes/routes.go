@@ -71,6 +71,7 @@ func Setup(r *gin.Engine) {
 			app.GET("/week-plan/rules", handlers.GetWeekPlanRulesHandler)
 			app.POST("/week-plan/regenerate", handlers.RegenerateWeekPlanHandler)
 			app.POST("/week-plan/regenerate-day", handlers.RegenerateWeekPlanDayHandler)
+			app.GET("/week-plan/history", handlers.GetWeekPlanHistoryHandler)
 			app.GET("/shopping-list", handlers.GetShoppingList)
 			app.POST("/shopping-list/toggle", handlers.ToggleShoppingCheckHandler)
 			app.POST("/shopping-list/inventory", handlers.ToggleHomeInventoryHandler)
