@@ -20,7 +20,8 @@ const (
 // Recommendation rows are capped at today: future rows are the current
 // plan's tail, not something the family has eaten (same reasoning as
 // recentDishIDMap). now is injectable: week-plan callers pass planNow(),
-// the tomorrow pick passes time.Now().
+// the tomorrow pick passes planNow() as well (both default to the wall clock;
+// tests pin planNow via withPlanNow).
 func lastSeenDishDates(now time.Time) map[uint]string {
 	today := now.Format("2006-01-02")
 	since := now.AddDate(0, 0, -(staleRepeatWindowDays - 1)).Format("2006-01-02")

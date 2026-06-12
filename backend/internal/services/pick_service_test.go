@@ -2,6 +2,7 @@ package services
 
 import (
 	"testing"
+	"time"
 
 	"ninimenu/internal/models"
 )
@@ -54,35 +55,53 @@ func TestPickPenaltyAdjustment(t *testing.T) {
 	favs := map[string]int{"家常菜": 2}
 
 	fav := models.Dish{Name: "红烧肉", Category: "家常菜", Favorite: true, DishRole: "meat"}
-	if got := pickPenaltyAdjustment(fav, favs, false); got != 0 {
+	if got := pickPenaltyAdjustment(fav, favs, false, -1); got != 0 {
 		t.Errorf("favorite dish = %d, want 0", got)
 	}
 	plain := models.Dish{Name: "清炒时蔬", Category: "家常菜", DishRole: "veg"}
-	if got := pickPenaltyAdjustment(plain, favs, false); got != -12 {
+	if got := pickPenaltyAdjustment(plain, favs, false, -1); got != -12 {
 		t.Errorf("non-favorite = %d, want -12", got)
 	}
 	unfamiliar := models.Dish{Name: "大盘鸡", Category: "新疆菜", DishRole: "meat"}
-	if got := pickPenaltyAdjustment(unfamiliar, favs, false); got != -37 {
+	if got := pickPenaltyAdjustment(unfamiliar, favs, false, -1); got != -37 {
 		t.Errorf("unfamiliar category = %d, want -37", got)
 	}
 	uncategorized := models.Dish{Name: "随手菜", Category: "", DishRole: "veg"}
-	if got := pickPenaltyAdjustment(uncategorized, favs, false); got != -12 {
+	if got := pickPenaltyAdjustment(uncategorized, favs, false, -1); got != -12 {
 		t.Errorf("empty category = %d, want -12 (no cuisine layer)", got)
 	}
 	slowSoup := models.Dish{Name: "莲藕排骨汤", Category: "家常菜", DishRole: "soup", CookTime: 90}
-	if got := pickPenaltyAdjustment(slowSoup, favs, false); got != -42 {
+	if got := pickPenaltyAdjustment(slowSoup, favs, false, -1); got != -42 {
 		t.Errorf("weekday slow soup = %d, want -42 (-12 -30)", got)
 	}
-	if got := pickPenaltyAdjustment(slowSoup, favs, true); got != -12 {
+	if got := pickPenaltyAdjustment(slowSoup, favs, true, -1); got != -12 {
 		t.Errorf("weekend slow soup = %d, want -12", got)
 	}
 	quickSoup := models.Dish{Name: "紫菜蛋花汤", Category: "家常菜", DishRole: "soup", CookTime: 8}
-	if got := pickPenaltyAdjustment(quickSoup, favs, false); got != -12 {
+	if got := pickPenaltyAdjustment(quickSoup, favs, false, -1); got != -12 {
 		t.Errorf("weekday quick soup = %d, want -12 (no slow penalty)", got)
 	}
 	hardSoup := models.Dish{Name: "佛跳墙", Category: "家常菜", DishRole: "soup", CookTime: 30, Difficulty: "hard"}
-	if got := pickPenaltyAdjustment(hardSoup, favs, false); got != -42 {
+	if got := pickPenaltyAdjustment(hardSoup, favs, false, -1); got != -42 {
 		t.Errorf("weekday hard soup = %d, want -42 (-12 -30 via difficulty)", got)
+	}
+
+	// Freshness decay cases — delta relative to daysSinceLast=-1 (baseline, no decay).
+	// round(30×(14-d)/14): d=0 → round(30)=30; d=5 → round(30×9/14)=round(19.2857)=19;
+	// d=14 → round(0)=0.
+	base := models.Dish{Name: "红烧肉", Category: "家常菜", Favorite: true, DishRole: "meat"}
+	baseline := pickPenaltyAdjustment(base, favs, false, -1)
+	if got := pickPenaltyAdjustment(base, favs, false, 0); got != baseline-30 {
+		t.Errorf("daysSinceLast=0 decay = %d, want baseline-30 (%d)", got, baseline-30)
+	}
+	if got := pickPenaltyAdjustment(base, favs, false, 5); got != baseline-19 {
+		t.Errorf("daysSinceLast=5 decay = %d, want baseline-19 (%d)", got, baseline-19)
+	}
+	if got := pickPenaltyAdjustment(base, favs, false, 14); got != baseline {
+		t.Errorf("daysSinceLast=14 decay = %d, want baseline (%d, no penalty at window edge)", got, baseline)
+	}
+	if got := pickPenaltyAdjustment(base, favs, false, -1); got != baseline {
+		t.Errorf("daysSinceLast=-1 decay = %d, want baseline (%d, no decay)", got, baseline)
 	}
 }
 
@@ -106,8 +125,25 @@ func TestSortTomorrowPoolPrefersFavorites(t *testing.T) {
 		{ID: 1, Name: "大盘鸡", Category: "新疆菜", DishRole: "meat", TraitSource: "manual", TraitVersion: models.DishTraitVersion},
 		{ID: 2, Name: "红烧肉", Category: "家常菜", Favorite: true, DishRole: "meat", TraitSource: "manual", TraitVersion: models.DishTraitVersion},
 	}
-	sortTomorrowPool(pool, "balanced", favs, false)
+	sortTomorrowPool(pool, "balanced", favs, false, nil)
 	if pool[0].Name != "红烧肉" {
 		t.Fatalf("pool[0] = %s, want 红烧肉 (favorite of a familiar category first)", pool[0].Name)
+	}
+}
+
+func TestPickTomorrowDishesAppliesFreshnessDecay(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	a := createDishForPlanTest(t, "明日鸡块A", "", "鸡肉")
+	b := createDishForPlanTest(t, "明日鸡块B", "", "鸡肉")
+	// A 五天前打卡（相对真实时钟；明天参照下 d=6 → 镜像扣 round(30×8/14)=17 分）
+	five := time.Now().AddDate(0, 0, -5).Format("2006-01-02")
+	mustCreate(t, &models.MealRecord{DishID: a.ID, DishName: a.Name, MealType: "dinner", MealDate: five})
+
+	picks, err := PickTomorrowDishes(TomorrowPickOptions{Count: 2})
+	if err != nil {
+		t.Fatalf("PickTomorrowDishes() error = %v", err)
+	}
+	if len(picks) != 2 || picks[0].ID != b.ID {
+		t.Errorf("五天前吃过的 A 应排在 B 之后，got %+v", picks)
 	}
 }

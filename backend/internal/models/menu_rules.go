@@ -135,7 +135,9 @@ func DefaultMenuRules() []MenuRule {
 		// The three v3 penalty rules below (non_favorite_penalty,
 		// unfamiliar_category_penalty, weekday_slow_soup_penalty) are mirrored by
 		// pickPenaltyAdjustment in services/pick_service.go — keep the numbers in
-		// sync. The two v4 soup rules further down are week/prev-soup scoped and
+		// sync. The v5 stale_repeat_penalty rule further down is also mirrored by
+		// pickPenaltyAdjustment (factory constants only; rule-page tuning reaches
+		// the week plan only). The two v4 soup rules are week/prev-soup scoped and
 		// intentionally NOT mirrored (the single-dish pick has no such context).
 		{
 			Code:        "non_favorite_penalty",

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"math"
 	"math/rand"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
@@ -131,8 +132,9 @@ func PickTomorrowDishes(opts TomorrowPickOptions) ([]models.Dish, error) {
 		pool = filterTomorrowPool(dishes, "balanced", map[uint]bool{}, recent, false)
 	}
 
-	tomorrow := time.Now().AddDate(0, 0, 1)
-	sortTomorrowPool(pool, profile, favoriteCategoryCounts(), isWeekend(tomorrow))
+	tomorrow := planNow().AddDate(0, 0, 1)
+	daysSince := daysSinceFor(tomorrow, lastSeenDishDates(planNow()))
+	sortTomorrowPool(pool, profile, favoriteCategoryCounts(), isWeekend(tomorrow), daysSince)
 	if len(pool) > count {
 		pool = pool[:count]
 	}
@@ -196,13 +198,15 @@ func matchesTomorrowProfile(d models.Dish, profile string) bool {
 
 // pickPenaltyAdjustment mirrors the three v3 default score rules
 // (non_favorite_penalty / unfamiliar_category_penalty /
-// weekday_slow_soup_penalty) for the tomorrow-pick path, which doesn't run
-// the rule engine. Keep the numbers in sync with models.DefaultMenuRules;
-// rule-page tuning only reaches the week plan.
+// weekday_slow_soup_penalty) and the v5 freshness decay (stale_repeat_penalty,
+// factory constants staleRepeatDefaultPoints / staleRepeatWindowDays) for the
+// tomorrow-pick path, which doesn't run the rule engine. Keep the numbers in
+// sync with models.DefaultMenuRules and week_plan_freshness.go; rule-page
+// tuning only reaches the week plan.
 // weekly_slow_soup_limit and soup_ingredient_repeat_penalty are week/prev-soup
 // scoped and intentionally not mirrored — the tomorrow pick has no week or
 // prev-soup context.
-func pickPenaltyAdjustment(d models.Dish, categoryFavorites map[string]int, weekend bool) int {
+func pickPenaltyAdjustment(d models.Dish, categoryFavorites map[string]int, weekend bool, daysSinceLast int) int {
 	adjust := 0
 	if !d.Favorite {
 		adjust -= 12
@@ -213,18 +217,28 @@ func pickPenaltyAdjustment(d models.Dish, categoryFavorites map[string]int, week
 	if !weekend && d.DishRole == "soup" && (d.CookTime > 45 || d.Difficulty == "hard") {
 		adjust -= 30
 	}
+	if daysSinceLast >= 0 && daysSinceLast < staleRepeatWindowDays {
+		adjust -= int(math.Round(float64(staleRepeatDefaultPoints) * float64(staleRepeatWindowDays-daysSinceLast) / float64(staleRepeatWindowDays)))
+	}
 	return adjust
 }
 
-func sortTomorrowPool(dishes []models.Dish, profile string, categoryFavorites map[string]int, weekend bool) {
+func sortTomorrowPool(dishes []models.Dish, profile string, categoryFavorites map[string]int, weekend bool, daysSince map[uint]int) {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	r.Shuffle(len(dishes), func(i, j int) {
 		dishes[i], dishes[j] = dishes[j], dishes[i]
 	})
 
+	daysSinceOf := func(id uint) int {
+		if d, ok := daysSince[id]; ok {
+			return d
+		}
+		return -1
+	}
+
 	sort.SliceStable(dishes, func(i, j int) bool {
-		a := tomorrowDishScore(dishes[i], profile) + pickPenaltyAdjustment(dishes[i], categoryFavorites, weekend)
-		b := tomorrowDishScore(dishes[j], profile) + pickPenaltyAdjustment(dishes[j], categoryFavorites, weekend)
+		a := tomorrowDishScore(dishes[i], profile) + pickPenaltyAdjustment(dishes[i], categoryFavorites, weekend, daysSinceOf(dishes[i].ID))
+		b := tomorrowDishScore(dishes[j], profile) + pickPenaltyAdjustment(dishes[j], categoryFavorites, weekend, daysSinceOf(dishes[j].ID))
 		if a != b {
 			return a > b
 		}
