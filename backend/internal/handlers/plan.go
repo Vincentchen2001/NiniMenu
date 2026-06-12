@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
 	"ninimenu/internal/services"
@@ -45,8 +46,12 @@ func RegenerateWeekPlanDayHandler(c *gin.Context) {
 
 func GetWeekPlanHistoryHandler(c *gin.Context) {
 	history, err := services.WeekPlanHistoryByMonth(c.Query("month"))
-	if err != nil {
+	if errors.Is(err, services.ErrInvalidHistoryMonth) {
 		utils.BadRequest(c, err.Error())
+		return
+	}
+	if err != nil {
+		utils.InternalError(c, "读取菜单历史失败")
 		return
 	}
 	utils.Success(c, history)

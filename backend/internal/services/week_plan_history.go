@@ -1,7 +1,7 @@
 package services
 
 import (
-	"fmt"
+	"errors"
 	"ninimenu/internal/database"
 	"ninimenu/internal/models"
 	"regexp"
@@ -19,16 +19,19 @@ type PlannedDishEntry struct {
 
 var historyMonthPattern = regexp.MustCompile(`^\d{4}-\d{2}$`)
 
+// ErrInvalidHistoryMonth rejects malformed month params before any query.
+var ErrInvalidHistoryMonth = errors.New("月份格式无效，应为 YYYY-MM")
+
 // WeekPlanHistoryByMonth returns the planned dishes recorded for each date of
 // the month, keyed by YYYY-MM-DD. Rows come from dish_recommendations, whose
 // past entries are immutable (SaveWeekPlan only rewrites today and later), so
 // this is a faithful record of what was planned at the time.
 func WeekPlanHistoryByMonth(month string) (map[string][]PlannedDishEntry, error) {
 	if !historyMonthPattern.MatchString(month) {
-		return nil, fmt.Errorf("月份格式无效，应为 YYYY-MM")
+		return nil, ErrInvalidHistoryMonth
 	}
 	if _, err := time.Parse("2006-01", month); err != nil {
-		return nil, fmt.Errorf("月份格式无效，应为 YYYY-MM")
+		return nil, ErrInvalidHistoryMonth
 	}
 
 	var rows []models.DishRecommendation
