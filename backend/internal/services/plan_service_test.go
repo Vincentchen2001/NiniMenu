@@ -1978,13 +1978,21 @@ func TestNextWeekGenerationPenalizesThisWeekTail(t *testing.T) {
 	// Dishes must have pork ingredients so they get DishRole="meat" and compete
 	// in a strict-role stage where the stale_repeat_penalty score rule is active.
 	a := createDishForPlanTest(t, "下周惩罚红烧肉A", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
-	_ = createDishForPlanTest(t, "下周惩罚红烧肉B", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
-	// Dish A is planned this Sunday (2026-06-14) — d=1 before next Monday (2026-06-15)
-	// The weekStart-1 cap for next week (2026-06-15-1 = 2026-06-14) includes it.
+	b := createDishForPlanTest(t, "下周惩罚红烧肉B", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
+	// Dish A is planned this Sunday (2026-06-14): after today, so it is visible
+	// ONLY through the weekStart-1 cap. d=1 at next Monday → ≈ -27.86.
 	mustCreate(t, &models.DishRecommendation{
 		DishID: a.ID, DishName: a.Name,
 		Source: "week_plan", MealType: "lunch", PlannedDate: "2026-06-14",
 	})
+	// Dish B was eaten 2026-06-03: inside the 14-day decay window, before
+	// today (visible under BOTH cap variants), and outside the 3-day cooldown
+	// so stage 1 still considers it. d=12 at next Monday → ≈ -4.29. That makes
+	// each cap variant deterministic in opposite directions: with the
+	// weekStart-1 cap A loses to B (-27.86 vs -4.29, gap ≫ rand jitter 0..1);
+	// if the cap regressed to plain today, A would carry no penalty and beat B
+	// (0 vs -4.29) — failing this test reliably instead of by coin flip.
+	mustCreate(t, &models.MealRecord{DishID: b.ID, DishName: b.Name, MealType: "dinner", MealDate: "2026-06-03"})
 	plan, err := GenerateWeekPlanForWeek("2026-06-15")
 	if err != nil {
 		t.Fatalf("GenerateWeekPlanForWeek error = %v", err)
@@ -1992,14 +2000,10 @@ func TestNextWeekGenerationPenalizesThisWeekTail(t *testing.T) {
 	if len(plan.Days) != 7 {
 		t.Fatalf("want 7 days, got %d", len(plan.Days))
 	}
-	// Next Monday (Days[0]) lunch should prefer B over A since A carries freshness
-	// penalty (d=1, ≈ -27.86 pts) — far larger than rand jitter (0..1).
-	// Both dishes are "meat" role so they compete in strict-role stages where
-	// the stale_repeat_penalty score rule is enforced.
-	for _, dish := range plan.Days[0].Lunch {
-		if dish.ID == a.ID {
-			t.Fatalf("next Monday lunch should not pick A (d=1 decay penalty), got dish %s", dish.Name)
-		}
+	// Next Monday's single lunch slot must hold B, not A: A's tail penalty is
+	// the only thing separating two otherwise identical meat dishes.
+	if len(plan.Days[0].Lunch) != 1 || plan.Days[0].Lunch[0].ID != b.ID {
+		t.Fatalf("next Monday lunch should pick B over the penalized A, got %+v", plan.Days[0].Lunch)
 	}
 }
 
