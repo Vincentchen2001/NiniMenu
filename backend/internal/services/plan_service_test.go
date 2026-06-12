@@ -2026,6 +2026,42 @@ func TestSaveWeekPlanRoutesToWeekOfDays(t *testing.T) {
 	}
 }
 
+func TestSaveWeekPlanDropsForeignWeekDays(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)) // Wednesday, current week = 2026-06-08
+	dish := createDishForPlanTest(t, "混周红烧肉", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
+	// Days straddle two weeks: days[0] addresses next week (2026-06-15), the
+	// second day belongs to the CURRENT week and is >= today, so without the
+	// single-week filter it would land in next week's snapshot AND write a
+	// recommendation row for a week whose snapshot never changed.
+	plan := &WeekPlan{Days: []WeekDayPlan{
+		{Date: "2026-06-15", DayName: "周一"},
+		{Date: "2026-06-12", DayName: "周五", Lunch: []models.Dish{dish}},
+	}}
+	if err := SaveWeekPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok := loadWeekPlanRecord("2026-06-15")
+	if !ok {
+		t.Fatal("next-week row missing")
+	}
+	var stored WeekPlan
+	if err := json.Unmarshal([]byte(rec.PlanJSON), &stored); err != nil {
+		t.Fatalf("unmarshal stored snapshot: %v", err)
+	}
+	if len(stored.Days) != 1 || stored.Days[0].Date != "2026-06-15" {
+		t.Fatalf("snapshot must keep only the addressed week's days, got %+v", stored.Days)
+	}
+	var count int64
+	database.DB.Model(&models.DishRecommendation{}).Where("planned_date = ?", "2026-06-12").Count(&count)
+	if count != 0 {
+		t.Fatalf("foreign-week day must not write recommendation rows, got %d", count)
+	}
+	if _, ok := loadWeekPlanRecord("2026-06-08"); ok {
+		t.Fatal("a next-week save must not create or touch the current-week row")
+	}
+}
+
 func TestGetWeekPlanForWeekDoesNotAutoGenerate(t *testing.T) {
 	setupPlanServiceTestDB(t)
 	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))

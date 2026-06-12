@@ -29,6 +29,17 @@ func SaveWeekPlan(plan *WeekPlan) error {
 			weekKey = derived
 		}
 	}
+	// One snapshot row = one week. Days outside the addressed week — or with
+	// unparsable dates — are discarded, not silently routed: a mixed-week PUT
+	// must not write foreign days into this week's snapshot, rewrite another
+	// week's recommendation rows, or bypass its read-only-history merge.
+	kept := plan.Days[:0]
+	for _, day := range plan.Days {
+		if monday, err := mondayOf(day.Date); err == nil && monday == weekKey {
+			kept = append(kept, day)
+		}
+	}
+	plan.Days = kept
 	restorePastDaysFromStored(plan, weekKey)
 	data, err := json.Marshal(plan)
 	if err != nil {
