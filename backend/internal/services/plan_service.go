@@ -113,17 +113,26 @@ func GetCachedWeekPlan() *WeekPlan {
 }
 
 func RegenerateWeekPlan() *WeekPlan {
-	plan, _ := GenerateWeekPlan()
+	return RegenerateWeekPlanForWeek(getCurrentWeekKey())
+}
+
+// RegenerateWeekPlanForWeek generates a fresh plan for weekStart and saves it.
+// If generation yields 0 days (no dishes), the plan is returned without saving.
+func RegenerateWeekPlanForWeek(weekStart string) *WeekPlan {
+	plan, _ := GenerateWeekPlanForWeek(weekStart)
+	if len(plan.Days) == 0 {
+		return plan
+	}
 	_ = SaveWeekPlan(plan)
 	return plan
 }
 
-// InvalidateWeekPlanCache clears the current week's generated plan so the
-// next read regenerates it. The row itself stays (one-off prefs live on it),
-// and past weeks are never touched.
+// InvalidateWeekPlanCache clears the current week's and all future weeks'
+// generated plans so the next read regenerates them. The rows themselves stay
+// (one-off prefs live on them), and past weeks are never touched.
 func InvalidateWeekPlanCache() {
 	database.DB.Model(&models.WeekPlanRecord{}).
-		Where("user_id = ? AND week_start = ?", CurrentUserID, getCurrentWeekKey()).
+		Where("user_id = ? AND week_start >= ?", CurrentUserID, getCurrentWeekKey()).
 		Update("plan_json", "")
 	planMu.Lock()
 	cachedPlan = nil
@@ -148,8 +157,9 @@ type weekPlanGenContext struct {
 }
 
 // buildWeekPlanGenContext returns nil when no enabled dish survives the
-// blocked-ingredient filter.
-func buildWeekPlanGenContext() *weekPlanGenContext {
+// blocked-ingredient filter. weekStart is the Monday key of the week being
+// generated; it controls which prefs and freshness window to use.
+func buildWeekPlanGenContext(weekStart string) *weekPlanGenContext {
 	var dishes []models.Dish
 	database.DB.Where("enabled = ?", true).Find(&dishes)
 	dishes = FilterBlockedDishes(dishes)
@@ -160,7 +170,7 @@ func buildWeekPlanGenContext() *weekPlanGenContext {
 		dishes[i] = ensureDishTraits(dishes[i])
 	}
 
-	prefs := GetWeekPlanPreferences()
+	prefs := GetWeekPlanPreferencesForWeek(weekStart)
 	rules, err := ListMenuRules()
 	var warnings []string
 	if err != nil {
@@ -193,7 +203,7 @@ func buildWeekPlanGenContext() *weekPlanGenContext {
 		prefs:             prefs,
 		rules:             compiledRules,
 		recent:            recentDishIDMap(RecommendationCooldownDays()),
-		lastSeen:          lastSeenDishDates(planNow(), getCurrentWeekKey()),
+		lastSeen:          lastSeenDishDates(planNow(), weekStart),
 		categoryFavorites: favoriteCategoryCounts(),
 		warnings:          warnings,
 		r:                 rand.New(rand.NewSource(time.Now().UnixNano())),
@@ -268,24 +278,31 @@ func containsDishID(dishes []models.Dish, id uint) bool {
 }
 
 func GenerateWeekPlan() (*WeekPlan, error) {
-	ctx := buildWeekPlanGenContext()
+	return GenerateWeekPlanForWeek(getCurrentWeekKey())
+}
+
+// GenerateWeekPlanForWeek generates a full 7-day plan for the week starting on
+// weekStart (a Monday key, e.g. "2026-06-15"). Past days within that week are
+// frozen from the stored snapshot; for future weeks no day is in the past so
+// nothing freezes (manual dishes via keepLunch/keepDinner still survive).
+func GenerateWeekPlanForWeek(weekStart string) (*WeekPlan, error) {
+	monday, err := time.Parse("2006-01-02", weekStart)
+	if err != nil {
+		return &WeekPlan{}, fmt.Errorf("无效的周起始日期")
+	}
+
+	ctx := buildWeekPlanGenContext(weekStart)
 	if ctx == nil {
 		return &WeekPlan{}, nil
 	}
 
-	now := planNow()
-	weekday := int(now.Weekday())
-	if weekday == 0 {
-		weekday = 7
-	}
-	monday := now.AddDate(0, 0, 1-weekday)
 	today := todayKey()
 
 	// Freeze guard: days already gone are copied verbatim from the stored
 	// snapshot (read-only history), and manual dishes on remaining days are
 	// handed to generateDay so they survive the regenerate.
 	var storedDays map[string]WeekDayPlan
-	if rec, ok := loadWeekPlanRecord(getCurrentWeekKey()); ok && rec.PlanJSON != "" {
+	if rec, ok := loadWeekPlanRecord(weekStart); ok && rec.PlanJSON != "" {
 		var stored WeekPlan
 		if json.Unmarshal([]byte(rec.PlanJSON), &stored) == nil {
 			storedDays = make(map[string]WeekDayPlan, len(stored.Days))
@@ -327,16 +344,42 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 	return &WeekPlan{Days: days, Warnings: uniqueWarnings(ctx.warnings)}, nil
 }
 
-// RegenerateWeekPlanDay replaces a single day of the current week plan,
-// keeping every other day untouched and avoiding their dishes.
+// GetWeekPlanForWeek returns the stored plan for the given weekStart without
+// triggering auto-generation. For the current week it delegates to
+// GetCachedWeekPlan. For other weeks it returns the stored snapshot, or an
+// empty plan if none exists.
+func GetWeekPlanForWeek(weekStart string) *WeekPlan {
+	if weekStart == getCurrentWeekKey() {
+		return GetCachedWeekPlan()
+	}
+	rec, ok := loadWeekPlanRecord(weekStart)
+	if !ok || rec.PlanJSON == "" {
+		return &WeekPlan{Days: []WeekDayPlan{}}
+	}
+	var plan WeekPlan
+	if json.Unmarshal([]byte(rec.PlanJSON), &plan) == nil && len(plan.Days) > 0 {
+		return &plan
+	}
+	fmt.Printf("菜单存档解析失败（week_start=%s）\n", weekStart)
+	return &WeekPlan{Days: []WeekDayPlan{}}
+}
+
+// RegenerateWeekPlanDay replaces a single day of the week plan containing
+// date, keeping every other day untouched and avoiding their dishes. Works
+// for the current week and for any future week that already has a generated
+// plan. Returns an error if the week has not been generated yet.
 func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 	date = strings.TrimSpace(date)
 	if date < todayKey() {
 		return nil, fmt.Errorf("过去的天不能重新生成")
 	}
-	current := GetCachedWeekPlan()
-	if current == nil || len(current.Days) == 0 {
+	weekKey, err := mondayOf(date)
+	if err != nil {
 		return nil, fmt.Errorf("日期不在本周菜单内")
+	}
+	current := GetWeekPlanForWeek(weekKey)
+	if current == nil || len(current.Days) == 0 {
+		return nil, fmt.Errorf("该周菜单尚未生成，请先生成")
 	}
 	dayIndex := -1
 	for i, day := range current.Days {
@@ -353,7 +396,7 @@ func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 		return nil, fmt.Errorf("日期不在本周菜单内")
 	}
 
-	ctx := buildWeekPlanGenContext()
+	ctx := buildWeekPlanGenContext(weekKey)
 	if ctx == nil {
 		return nil, fmt.Errorf("没有可用的菜品，请先在菜品库中添加")
 	}

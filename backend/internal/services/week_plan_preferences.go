@@ -59,6 +59,10 @@ func (q MealQuota) total() int {
 }
 
 func GetWeekPlanPreferences() WeekPlanPreferences {
+	return GetWeekPlanPreferencesForWeek(getCurrentWeekKey())
+}
+
+func GetWeekPlanPreferencesForWeek(weekStart string) WeekPlanPreferences {
 	prefs := defaultWeekPlanPreferencesFromSettings()
 	var setting models.Setting
 	if err := database.DB.Where("`key` = ?", weekPlanPreferencesSettingKey).First(&setting).Error; err == nil && setting.Value != "" {
@@ -67,11 +71,11 @@ func GetWeekPlanPreferences() WeekPlanPreferences {
 			prefs = stored
 		}
 	}
-	// One-off parts never come from the resident setting; they live on this
+	// One-off parts never come from the resident setting; they live on the
 	// week's row and reset when the week rolls over.
 	prefs.WeekWant = nil
 	prefs.Days = nil
-	if rec, ok := loadWeekPlanRecord(getCurrentWeekKey()); ok && rec.PrefsJSON != "" {
+	if rec, ok := loadWeekPlanRecord(weekStart); ok && rec.PrefsJSON != "" {
 		var oneOff weekPlanOneOffPrefs
 		if json.Unmarshal([]byte(rec.PrefsJSON), &oneOff) == nil {
 			prefs.WeekWant = oneOff.WeekWant
@@ -82,6 +86,10 @@ func GetWeekPlanPreferences() WeekPlanPreferences {
 }
 
 func SaveWeekPlanPreferences(prefs WeekPlanPreferences) error {
+	return SaveWeekPlanPreferencesForWeek(prefs, getCurrentWeekKey())
+}
+
+func SaveWeekPlanPreferencesForWeek(prefs WeekPlanPreferences, weekStart string) error {
 	prefs = normalizeWeekPlanPreferences(prefs)
 
 	oneOffData, err := json.Marshal(weekPlanOneOffPrefs{WeekWant: prefs.WeekWant, Days: prefs.Days})
@@ -102,7 +110,7 @@ func SaveWeekPlanPreferences(prefs WeekPlanPreferences) error {
 		FirstOrCreate(&models.Setting{}).Error; err != nil {
 		return err
 	}
-	if err := upsertWeekPlanRecordPrefs(getCurrentWeekKey(), string(oneOffData)); err != nil {
+	if err := upsertWeekPlanRecordPrefs(weekStart, string(oneOffData)); err != nil {
 		return err
 	}
 	// Deliberately NOT invalidating the cached week plan here: preference

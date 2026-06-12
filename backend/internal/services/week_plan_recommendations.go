@@ -11,17 +11,24 @@ import (
 
 const recommendationSourceWeekPlan = "week_plan"
 
-// SaveWeekPlan persists the plan as this week's snapshot row and refreshes
-// the flat recommendation rows. Two freeze guards live here so EVERY write
-// path (generation, regeneration, manual edit PUT) honours read-only history:
-// restorePastDaysFromStored swaps days before today back to the stored
-// version, and replaceWeekPlanRecommendations never touches past rows.
+// SaveWeekPlan persists the plan to the week-start row derived from the plan's
+// own days (week routing by content) and refreshes the flat recommendation rows.
+// Two freeze guards live here so EVERY write path (generation, regeneration,
+// manual edit PUT) honours read-only history: restorePastDaysFromStored swaps
+// days before today back to the stored version, and replaceWeekPlanRecommendations
+// never touches past rows. The in-memory cache is only updated when the saved
+// week matches the current week.
 func SaveWeekPlan(plan *WeekPlan) error {
 	if plan == nil {
 		plan = &WeekPlan{Days: []WeekDayPlan{}}
 	}
 	normalizeWeekPlan(plan)
 	weekKey := getCurrentWeekKey()
+	if len(plan.Days) > 0 {
+		if derived, err := mondayOf(plan.Days[0].Date); err == nil {
+			weekKey = derived
+		}
+	}
 	restorePastDaysFromStored(plan, weekKey)
 	data, err := json.Marshal(plan)
 	if err != nil {
@@ -37,10 +44,12 @@ func SaveWeekPlan(plan *WeekPlan) error {
 		return err
 	}
 
-	planMu.Lock()
-	cachedPlan = plan
-	cachedWeekKey = weekKey
-	planMu.Unlock()
+	if weekKey == getCurrentWeekKey() {
+		planMu.Lock()
+		cachedPlan = plan
+		cachedWeekKey = weekKey
+		planMu.Unlock()
+	}
 	return nil
 }
 

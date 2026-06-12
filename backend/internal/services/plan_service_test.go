@@ -1944,3 +1944,174 @@ func TestMondayOf(t *testing.T) {
 		t.Fatal("mondayOf should reject garbage")
 	}
 }
+
+func TestGenerateWeekPlanForWeekCoversRequestedWeek(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)) // Wednesday
+	// Need enabled dishes for generation to produce 7 days
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+	})
+	for i := 1; i <= 5; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("下周菜%d", i), "", "")
+	}
+	plan, err := GenerateWeekPlanForWeek("2026-06-15")
+	if err != nil || len(plan.Days) != 7 {
+		t.Fatalf("want 7 days, got %d (err %v)", len(plan.Days), err)
+	}
+	if plan.Days[0].Date != "2026-06-15" || plan.Days[6].Date != "2026-06-21" {
+		t.Fatalf("wrong span: %s..%s", plan.Days[0].Date, plan.Days[6].Date)
+	}
+	if plan.Days[0].DayName != "周一" || plan.Days[6].DayName != "周日" {
+		t.Fatalf("wrong day names: %s..%s", plan.Days[0].DayName, plan.Days[6].DayName)
+	}
+}
+
+func TestNextWeekGenerationPenalizesThisWeekTail(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)) // Saturday, this week = 2026-06-08
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+	})
+	// Dishes must have pork ingredients so they get DishRole="meat" and compete
+	// in a strict-role stage where the stale_repeat_penalty score rule is active.
+	a := createDishForPlanTest(t, "下周惩罚红烧肉A", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
+	_ = createDishForPlanTest(t, "下周惩罚红烧肉B", `["家常菜"]`, `[{"name":"猪肉","amount":"200g"}]`)
+	// Dish A is planned this Sunday (2026-06-14) — d=1 before next Monday (2026-06-15)
+	// The weekStart-1 cap for next week (2026-06-15-1 = 2026-06-14) includes it.
+	mustCreate(t, &models.DishRecommendation{
+		DishID: a.ID, DishName: a.Name,
+		Source: "week_plan", MealType: "lunch", PlannedDate: "2026-06-14",
+	})
+	plan, err := GenerateWeekPlanForWeek("2026-06-15")
+	if err != nil {
+		t.Fatalf("GenerateWeekPlanForWeek error = %v", err)
+	}
+	if len(plan.Days) != 7 {
+		t.Fatalf("want 7 days, got %d", len(plan.Days))
+	}
+	// Next Monday (Days[0]) lunch should prefer B over A since A carries freshness
+	// penalty (d=1, ≈ -27.86 pts) — far larger than rand jitter (0..1).
+	// Both dishes are "meat" role so they compete in strict-role stages where
+	// the stale_repeat_penalty score rule is enforced.
+	for _, dish := range plan.Days[0].Lunch {
+		if dish.ID == a.ID {
+			t.Fatalf("next Monday lunch should not pick A (d=1 decay penalty), got dish %s", dish.Name)
+		}
+	}
+}
+
+func TestSaveWeekPlanRoutesToWeekOfDays(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	plan := &WeekPlan{Days: []WeekDayPlan{{Date: "2026-06-15", DayName: "周一"}}}
+	if err := SaveWeekPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	var rec models.WeekPlanRecord
+	if err := database.DB.Where("week_start = ?", "2026-06-15").First(&rec).Error; err != nil || rec.PlanJSON == "" {
+		t.Fatalf("next-week row missing: %v", err)
+	}
+	planMu.RLock()
+	key := cachedWeekKey
+	planMu.RUnlock()
+	if key == "2026-06-15" {
+		t.Fatal("saving next week must not hijack the current-week cache")
+	}
+}
+
+func TestGetWeekPlanForWeekDoesNotAutoGenerate(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	plan := GetWeekPlanForWeek("2026-06-15")
+	if len(plan.Days) != 0 {
+		t.Fatalf("next week must stay empty until explicitly generated, got %d days", len(plan.Days))
+	}
+	var count int64
+	database.DB.Model(&models.WeekPlanRecord{}).Where("week_start = ?", "2026-06-15").Count(&count)
+	if count != 0 {
+		t.Fatal("read must not create a row")
+	}
+}
+
+func TestInvalidateWeekPlanCacheClearsFutureWeeks(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	// Seed rows for past (2026-06-01), current (2026-06-08), and next (2026-06-15)
+	planJSON := `{"days":[{"date":"2026-06-01","day_name":"周一","lunch":[],"dinner":[]}]}`
+	for _, weekStart := range []string{"2026-06-01", "2026-06-08", "2026-06-15"} {
+		if err := database.DB.Create(&models.WeekPlanRecord{
+			UserID: CurrentUserID, WeekStart: weekStart, PlanJSON: planJSON,
+		}).Error; err != nil {
+			t.Fatalf("seed row %s: %v", weekStart, err)
+		}
+	}
+	InvalidateWeekPlanCache()
+	// Past row (2026-06-01) must be untouched
+	past, ok := loadWeekPlanRecord("2026-06-01")
+	if !ok || past.PlanJSON != planJSON {
+		t.Fatalf("past week plan_json changed: ok=%v, json=%q", ok, past.PlanJSON)
+	}
+	// Current (2026-06-08) and future (2026-06-15) must be cleared
+	cur, ok := loadWeekPlanRecord("2026-06-08")
+	if !ok || cur.PlanJSON != "" {
+		t.Fatalf("current week plan_json should be empty, ok=%v, json=%q", ok, cur.PlanJSON)
+	}
+	next, ok := loadWeekPlanRecord("2026-06-15")
+	if !ok || next.PlanJSON != "" {
+		t.Fatalf("next week plan_json should be empty, ok=%v, json=%q", ok, next.PlanJSON)
+	}
+}
+
+func TestWeekPlanPreferencesPerWeek(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	// Next week's prefs should start empty
+	prefs := GetWeekPlanPreferencesForWeek("2026-06-15")
+	prefs.WeekWant = []string{"beef"}
+	if err := SaveWeekPlanPreferencesForWeek(prefs, "2026-06-15"); err != nil {
+		t.Fatal(err)
+	}
+	// Round-trip: next week sees "beef"
+	got := GetWeekPlanPreferencesForWeek("2026-06-15")
+	if len(got.WeekWant) != 1 || got.WeekWant[0] != "beef" {
+		t.Fatalf("next week WeekWant = %v, want [beef]", got.WeekWant)
+	}
+	// Current week must NOT see it
+	cur := GetWeekPlanPreferencesForWeek("2026-06-08")
+	for _, w := range cur.WeekWant {
+		if w == "beef" {
+			t.Fatal("current week must not inherit next week's WeekWant")
+		}
+	}
+}
+
+func TestRegenerateWeekPlanDayNextWeekRequiresPlan(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	// No plan for next week yet — must error
+	if _, err := RegenerateWeekPlanDay("2026-06-16"); err == nil {
+		t.Fatal("day-regen on an ungenerated week must error")
+	}
+	// Now generate + seed dishes so the week has a plan
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+	})
+	for i := 1; i <= 5; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("再生成菜%d", i), "", "")
+	}
+	RegenerateWeekPlanForWeek("2026-06-15")
+	plan, err := RegenerateWeekPlanDay("2026-06-16")
+	if err != nil {
+		t.Fatalf("day-regen after week generated should succeed: %v", err)
+	}
+	if len(plan.Days) != 7 {
+		t.Fatalf("want 7 days, got %d", len(plan.Days))
+	}
+	if plan.Days[1].Date != "2026-06-16" {
+		t.Fatalf("days[1] should be 2026-06-16, got %s", plan.Days[1].Date)
+	}
+}
