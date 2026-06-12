@@ -71,7 +71,7 @@ func daysSinceFor(refDate time.Time, lastSeen map[uint]string) map[uint]int {
 			result[id] = -1
 			continue
 		}
-		d := int(ref.Sub(parsed).Hours() / 24)
+		d := int(ref.Sub(parsed) / (24 * time.Hour))
 		if d < 0 {
 			d = -1
 		}

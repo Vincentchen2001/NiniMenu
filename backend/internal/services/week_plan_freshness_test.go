@@ -9,7 +9,7 @@ import (
 
 func TestLastSeenDishDatesMergesAndTrims(t *testing.T) {
 	setupPlanServiceTestDB(t)
-	now := time.Date(2026, 6, 8, 9, 0, 0, 0, time.Local) // today=2026-06-08, since=2026-05-26
+	now := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC) // today=2026-06-08, since=2026-05-26
 
 	// dish 1: 两表都有，取较近（推荐 06-05 > 打卡 06-01）
 	mustCreate(t, &models.MealRecord{DishID: 1, DishName: "A", MealType: "dinner", MealDate: "2026-06-01"})
@@ -36,7 +36,7 @@ func TestLastSeenDishDatesMergesAndTrims(t *testing.T) {
 }
 
 func TestDaysSinceFor(t *testing.T) {
-	ref := time.Date(2026, 6, 8, 23, 30, 0, 0, time.Local) // 时分秒不应影响整天差
+	ref := time.Date(2026, 6, 8, 23, 30, 0, 0, time.UTC) // 时分秒不应影响整天差
 	lastSeen := map[uint]string{
 		1: "2026-06-03", // 5 天前
 		2: "2026-06-08", // 今天
