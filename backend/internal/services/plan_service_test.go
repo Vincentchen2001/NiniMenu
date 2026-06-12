@@ -1824,3 +1824,69 @@ func TestSoupSchedulingRulesViaScoreEvaluation(t *testing.T) {
 		t.Fatalf("aromatics-only overlap score = %v, want 0", got)
 	}
 }
+
+func TestGenerateWeekPlanAppliesFreshnessDecay(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 8, 9, 0, 0, 0, time.Local)) // 周一
+	a := createDishForPlanTest(t, "决斗鸡块A", "", "鸡肉")
+	b := createDishForPlanTest(t, "决斗鸡块B", "", "鸡肉")
+	// A 五天前打卡：出了 3 天冷却（不被 recent 硬挡），但背 -19.3 衰减
+	mustCreate(t, &models.MealRecord{DishID: a.ID, DishName: a.Name, MealType: "dinner", MealDate: "2026-06-03"})
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+	})
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if len(plan.Days[0].Lunch) != 1 || plan.Days[0].Lunch[0].ID != b.ID {
+		t.Errorf("周一午餐应选无历史的 B（A 背衰减分），got %+v", plan.Days[0].Lunch)
+	}
+}
+
+func TestGenerateWeekPlanDecayExpiresAtWindow(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 8, 9, 0, 0, 0, time.Local)) // 周一
+	a := createDishForPlanTest(t, "对照鸡块A", "", "鸡肉")
+	b := createDishForPlanTest(t, "对照鸡块B", "", "鸡肉")
+	// A 十四天前（2026-05-25）：已出窗口，零惩罚；B 五天前：-19.3
+	mustCreate(t, &models.MealRecord{DishID: a.ID, DishName: a.Name, MealType: "dinner", MealDate: "2026-05-25"})
+	mustCreate(t, &models.MealRecord{DishID: b.ID, DishName: b.Name, MealType: "dinner", MealDate: "2026-06-03"})
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+	})
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if len(plan.Days[0].Lunch) != 1 || plan.Days[0].Lunch[0].ID != a.ID {
+		t.Errorf("周一午餐应选已出窗口的 A，got %+v", plan.Days[0].Lunch)
+	}
+}
+
+func TestDecayStillBitesWhenCooldownRelaxed(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 8, 9, 0, 0, 0, time.Local)) // 周一
+	a := createDishForPlanTest(t, "放宽鸡块A", "", "鸡肉")
+	b := createDishForPlanTest(t, "放宽鸡块B", "", "鸡肉")
+	// 两道都在 3 天冷却内 → 第 1 级无候选 → 第 2 级放弃"最近避重"。
+	// 旧行为：放宽后两道菜零惩罚平等竞争；新行为：衰减仍在，d=0 (-30) 输给 d=2 (-25.7)。
+	mustCreate(t, &models.DishRecommendation{DishID: a.ID, DishName: a.Name, Source: "week_plan", MealType: "lunch", PlannedDate: "2026-06-08"})
+	mustCreate(t, &models.DishRecommendation{DishID: b.ID, DishName: b.Name, Source: "week_plan", MealType: "lunch", PlannedDate: "2026-06-06"})
+	saveWeekPlanPreferenceForTest(t, WeekPlanPreferences{
+		Weekday: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+		Weekend: WeekPlanPeriodPreferences{Profile: "balanced", Lunch: MealQuota{MeatCount: 1}},
+	})
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan() error = %v", err)
+	}
+	if len(plan.Days[0].Lunch) != 1 || plan.Days[0].Lunch[0].ID != b.ID {
+		t.Errorf("冷却放宽后应选 d=2 的 B 而非 d=0 的 A，got %+v", plan.Days[0].Lunch)
+	}
+}
