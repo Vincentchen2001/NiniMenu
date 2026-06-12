@@ -23,6 +23,11 @@ type WeekDayPlan struct {
 	DayName string        `json:"day_name"`
 	Lunch   []models.Dish `json:"lunch"`
 	Dinner  []models.Dish `json:"dinner"`
+	// Manual*IDs mark dishes the user added by hand (split per meal so a dish
+	// added manually to lunch is not mis-marked when the system also picks it
+	// for dinner). They survive regeneration: see generateDay's keep params.
+	ManualLunchIDs  []uint `json:"manual_lunch_ids,omitempty"`
+	ManualDinnerIDs []uint `json:"manual_dinner_ids,omitempty"`
 }
 
 type WeekPlan struct {
@@ -172,8 +177,11 @@ func buildWeekPlanGenContext() *weekPlanGenContext {
 }
 
 // generateDay fills one weekday (0=Monday). globalUsed and weekPicked carry
-// cross-day dedup state and are updated with the picked dishes.
-func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalUsed map[uint]bool, weekPicked *[]models.Dish, prevSoups []models.Dish) WeekDayPlan {
+// cross-day dedup state and are updated with the picked dishes. keepLunch /
+// keepDinner are manually-added dishes that survive regeneration: they take
+// their quota slots up front, join every dedup set and rule context, and the
+// picker only fills what is left.
+func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalUsed map[uint]bool, weekPicked *[]models.Dish, prevSoups []models.Dish, keepLunch []models.Dish, keepDinner []models.Dish) WeekDayPlan {
 	periodPrefs := ctx.prefs.Weekday
 	if dayIndex >= 5 {
 		periodPrefs = ctx.prefs.Weekend
@@ -189,18 +197,49 @@ func (ctx *weekPlanGenContext) generateDay(dayIndex int, date time.Time, globalU
 	if dayIndex >= 0 && dayIndex < len(weekPlanDayNames) {
 		dayPlan.DayName = weekPlanDayNames[dayIndex]
 	}
+	for _, dish := range keepLunch {
+		dayPlan.ManualLunchIDs = append(dayPlan.ManualLunchIDs, dish.ID)
+	}
+	for _, dish := range keepDinner {
+		dayPlan.ManualDinnerIDs = append(dayPlan.ManualDinnerIDs, dish.ID)
+	}
 
 	usedThisDay := make(map[uint]bool)
 	var dayPicked []models.Dish
+	for _, dish := range appendDishSlices(keepLunch, keepDinner) {
+		globalUsed[dish.ID] = true
+		usedThisDay[dish.ID] = true
+		dayPicked = append(dayPicked, dish)
+		*weekPicked = append(*weekPicked, dish)
+	}
 
-	dayPlan.Lunch = pickQuotaDishes(ctx.lunchPool, lunchQuota, dayCtx, "lunch", dayPlan.DayName, globalUsed, usedThisDay, ctx.recent, dayPicked, *weekPicked, ctx.rules, &ctx.warnings, ctx.r)
-	dayPicked = append(dayPicked, dayPlan.Lunch...)
-	*weekPicked = append(*weekPicked, dayPlan.Lunch...)
-	dayPlan.Dinner = pickQuotaDishes(ctx.dinnerPool, dinnerQuota, dayCtx, "dinner", dayPlan.DayName, globalUsed, usedThisDay, ctx.recent, dayPicked, *weekPicked, ctx.rules, &ctx.warnings, ctx.r)
-	dayPicked = append(dayPicked, dayPlan.Dinner...)
-	*weekPicked = append(*weekPicked, dayPlan.Dinner...)
+	dayPlan.Lunch = pickQuotaDishes(ctx.lunchPool, reduceQuotaForKept(lunchQuota, keepLunch), dayCtx, "lunch", dayPlan.DayName, globalUsed, usedThisDay, ctx.recent, dayPicked, *weekPicked, ctx.rules, &ctx.warnings, ctx.r, keepLunch)
+	for _, dish := range dayPlan.Lunch {
+		if !containsDishID(keepLunch, dish.ID) {
+			dayPicked = append(dayPicked, dish)
+			*weekPicked = append(*weekPicked, dish)
+		}
+	}
+	dayPlan.Dinner = pickQuotaDishes(ctx.dinnerPool, reduceQuotaForKept(dinnerQuota, keepDinner), dayCtx, "dinner", dayPlan.DayName, globalUsed, usedThisDay, ctx.recent, dayPicked, *weekPicked, ctx.rules, &ctx.warnings, ctx.r, keepDinner)
+	for _, dish := range dayPlan.Dinner {
+		if !containsDishID(keepDinner, dish.ID) {
+			dayPicked = append(dayPicked, dish)
+			*weekPicked = append(*weekPicked, dish)
+		}
+	}
 
 	return dayPlan
+}
+
+// containsDishID reports whether dishes already contains id (used to avoid
+// double-counting keep dishes that were pre-registered in the dedup sets).
+func containsDishID(dishes []models.Dish, id uint) bool {
+	for _, dish := range dishes {
+		if dish.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func GenerateWeekPlan() (*WeekPlan, error) {
@@ -215,13 +254,47 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 		weekday = 7
 	}
 	monday := now.AddDate(0, 0, 1-weekday)
+	today := todayKey()
+
+	// Freeze guard: days already gone are copied verbatim from the stored
+	// snapshot (read-only history), and manual dishes on remaining days are
+	// handed to generateDay so they survive the regenerate.
+	var storedDays map[string]WeekDayPlan
+	if rec, ok := loadWeekPlanRecord(getCurrentWeekKey()); ok && rec.PlanJSON != "" {
+		var stored WeekPlan
+		if json.Unmarshal([]byte(rec.PlanJSON), &stored) == nil {
+			storedDays = make(map[string]WeekDayPlan, len(stored.Days))
+			for _, day := range stored.Days {
+				storedDays[day.Date] = day
+			}
+		}
+	}
 
 	var days []WeekDayPlan
 	globalUsed := make(map[uint]bool)
 	var weekPicked []models.Dish
 	var prevSoups []models.Dish
 	for i := 0; i < 7; i++ {
-		day := ctx.generateDay(i, monday.AddDate(0, 0, i), globalUsed, &weekPicked, prevSoups)
+		date := monday.AddDate(0, 0, i)
+		dateKey := date.Format("2006-01-02")
+		storedDay, hasStored := storedDays[dateKey]
+
+		if dateKey < today && hasStored {
+			for _, dish := range appendDishSlices(storedDay.Lunch, storedDay.Dinner) {
+				globalUsed[dish.ID] = true
+				weekPicked = append(weekPicked, dish)
+			}
+			days = append(days, storedDay)
+			prevSoups = soupsFromDishes(appendDishSlices(storedDay.Lunch, storedDay.Dinner))
+			continue
+		}
+
+		var keepLunch, keepDinner []models.Dish
+		if hasStored {
+			keepLunch = manualDishesForMeal(storedDay.Lunch, storedDay.ManualLunchIDs)
+			keepDinner = manualDishesForMeal(storedDay.Dinner, storedDay.ManualDinnerIDs)
+		}
+		day := ctx.generateDay(i, date, globalUsed, &weekPicked, prevSoups, keepLunch, keepDinner)
 		days = append(days, day)
 		prevSoups = soupsFromDishes(appendDishSlices(day.Lunch, day.Dinner))
 	}
@@ -233,6 +306,9 @@ func GenerateWeekPlan() (*WeekPlan, error) {
 // keeping every other day untouched and avoiding their dishes.
 func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 	date = strings.TrimSpace(date)
+	if date < todayKey() {
+		return nil, fmt.Errorf("过去的天不能重新生成")
+	}
 	current := GetCachedWeekPlan()
 	if current == nil || len(current.Days) == 0 {
 		return nil, fmt.Errorf("日期不在本周菜单内")
@@ -275,7 +351,10 @@ func RegenerateWeekPlanDay(date string) (*WeekPlan, error) {
 		}
 	}
 
-	newPlan.Days[dayIndex] = ctx.generateDay(dayIndex, parsedDate, globalUsed, &weekPicked, adjacentPlannedSoups(newPlan.Days, dayIndex))
+	targetDay := current.Days[dayIndex]
+	keepLunch := manualDishesForMeal(targetDay.Lunch, targetDay.ManualLunchIDs)
+	keepDinner := manualDishesForMeal(targetDay.Dinner, targetDay.ManualDinnerIDs)
+	newPlan.Days[dayIndex] = ctx.generateDay(dayIndex, parsedDate, globalUsed, &weekPicked, adjacentPlannedSoups(newPlan.Days, dayIndex), keepLunch, keepDinner)
 	// Retire the target day's old warnings — they describe picks that no
 	// longer exist; cross-day and rule-compile warnings stay.
 	dayName := current.Days[dayIndex].DayName
@@ -304,6 +383,50 @@ func soupsFromDishes(dishes []models.Dish) []models.Dish {
 		}
 	}
 	return result
+}
+
+// manualDishesForMeal returns the dishes in the slot that the user added by
+// hand (ids listed in manualIDs). Stale ids — manual dishes since removed
+// from the slot — drop out naturally.
+func manualDishesForMeal(dishes []models.Dish, manualIDs []uint) []models.Dish {
+	if len(manualIDs) == 0 {
+		return nil
+	}
+	wanted := make(map[uint]bool, len(manualIDs))
+	for _, id := range manualIDs {
+		wanted[id] = true
+	}
+	var kept []models.Dish
+	for _, dish := range dishes {
+		if wanted[dish.ID] {
+			kept = append(kept, dish)
+		}
+	}
+	return kept
+}
+
+// reduceQuotaForKept subtracts the slots already occupied by kept (manual)
+// dishes, matching each dish to the slot type it would fill with the same
+// test matchesWeekPlanSlot uses (soup, veg, else meat).
+func reduceQuotaForKept(quota MealQuota, kept []models.Dish) MealQuota {
+	for _, dish := range kept {
+		d := ensureDishTraits(dish)
+		switch {
+		case d.DishRole == "soup" || isSoupDish(d):
+			if quota.SoupCount > 0 {
+				quota.SoupCount--
+			}
+		case d.DishRole == "veg":
+			if quota.VegCount > 0 {
+				quota.VegCount--
+			}
+		default:
+			if quota.MeatCount > 0 {
+				quota.MeatCount--
+			}
+		}
+	}
+	return quota
 }
 
 // adjacentPlannedSoups collects the soups already planned on the days next
@@ -368,12 +491,15 @@ func wantBonus(dish models.Dish, want []string, points float64) float64 {
 	return 0
 }
 
-func pickQuotaDishes(pool []models.Dish, quota MealQuota, dayCtx weekPlanDayContext, mealType string, dayName string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, warnings *[]string, r *rand.Rand) []models.Dish {
+func pickQuotaDishes(pool []models.Dish, quota MealQuota, dayCtx weekPlanDayContext, mealType string, dayName string, globalUsed map[uint]bool, dayUsed map[uint]bool, recent map[uint]bool, dayPicked []models.Dish, weekPicked []models.Dish, rules []compiledMenuRule, warnings *[]string, r *rand.Rand, keep []models.Dish) []models.Dish {
 	quota = normalizeMealQuota(quota)
+	// Manual dishes occupy their slots up front: they sit in picked so every
+	// same-meal rule context sees them, and quota was already reduced by the
+	// caller (reduceQuotaForKept).
+	picked := append([]models.Dish{}, keep...)
 	if quota.total() <= 0 {
-		return []models.Dish{}
+		return picked
 	}
-	var picked []models.Dish
 	for _, slot := range weekPlanSlots(quota) {
 		dish, ok, relaxed := pickBestDishForSlot(pool, slot, dayCtx, quota, globalUsed, dayUsed, recent, picked, dayPicked, weekPicked, rules, r)
 		if !ok {

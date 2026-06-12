@@ -1316,6 +1316,7 @@ func TestRegenerateWeekPlanDayOnlyChangesTargetDay(t *testing.T) {
 // or the "regenerate one day" promise silently becomes "rebuild the week".
 func TestRegenerateWeekPlanDayAfterPrefsSaveKeepsOtherDays(t *testing.T) {
 	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 15, 8, 0, 0, 0, time.Local)) // 2026-06-15 = Monday; all 7 days are today-or-future
 	t.Cleanup(InvalidateWeekPlanCache)
 
 	quota := WeekPlanPeriodPreferences{
@@ -1548,6 +1549,150 @@ func TestAdjacentPlannedSoups(t *testing.T) {
 
 // TestSoupSchedulingRulesViaScoreEvaluation runs the two seeded v4 rules
 // through the real evaluateScoreRules path: compiled expression + rule env.
+func TestManualDishesForMeal(t *testing.T) {
+	a := models.Dish{ID: 1, Name: "甲"}
+	b := models.Dish{ID: 2, Name: "乙"}
+
+	kept := manualDishesForMeal([]models.Dish{a, b}, []uint{2, 99})
+	if len(kept) != 1 || kept[0].ID != 2 {
+		t.Fatalf("manualDishesForMeal = %+v, want only dish 2 (stale id 99 dropped)", kept)
+	}
+	if got := manualDishesForMeal([]models.Dish{a}, nil); got != nil {
+		t.Fatalf("nil manual ids should return nil, got %+v", got)
+	}
+}
+
+func TestReduceQuotaForKept(t *testing.T) {
+	soup := models.Dish{ID: 1, Name: "冬瓜汤", DishRole: "soup", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	veg := models.Dish{ID: 2, Name: "清炒时蔬", DishRole: "veg", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	meat := models.Dish{ID: 3, Name: "红烧肉", DishRole: "meat", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+
+	quota := reduceQuotaForKept(MealQuota{MeatCount: 2, VegCount: 1, SoupCount: 1}, []models.Dish{soup, veg, meat})
+	if quota.MeatCount != 1 || quota.VegCount != 0 || quota.SoupCount != 0 {
+		t.Fatalf("quota = %+v, want {1 0 0}", quota)
+	}
+
+	// 超量保留不把配额扣成负数。
+	quota = reduceQuotaForKept(MealQuota{MeatCount: 1}, []models.Dish{meat, meat})
+	if quota.MeatCount != 0 {
+		t.Fatalf("MeatCount = %d, want 0 (clamped)", quota.MeatCount)
+	}
+}
+
+func TestGenerateWeekPlanFreezesPastDays(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local)) // 周四
+
+	// 库里只有这些菜可选；冻结天的菜刻意不在库里（菜删了历史也不能变）。
+	for i := 0; i < 14; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("候选菜%d", i), `["家常菜"]`, `[{"name":"食材","amount":"适量"}]`)
+	}
+	frozen := models.Dish{ID: 9001, Name: "周一历史菜", DishRole: "meat", TraitSource: "manual", TraitVersion: models.DishTraitVersion}
+	storedPlan := WeekPlan{Days: []WeekDayPlan{
+		{Date: "2026-06-15", DayName: "周一", Lunch: []models.Dish{frozen}, Dinner: []models.Dish{}},
+		{Date: "2026-06-16", DayName: "周二", Lunch: []models.Dish{}, Dinner: []models.Dish{}},
+		{Date: "2026-06-17", DayName: "周三", Lunch: []models.Dish{}, Dinner: []models.Dish{}},
+	}}
+	storedJSON, _ := json.Marshal(storedPlan)
+	if err := database.DB.Create(&models.WeekPlanRecord{
+		UserID: CurrentUserID, WeekStart: "2026-06-15", PlanJSON: string(storedJSON),
+	}).Error; err != nil {
+		t.Fatalf("seed week row: %v", err)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan error = %v", err)
+	}
+	if len(plan.Days) != 7 {
+		t.Fatalf("days = %d, want 7", len(plan.Days))
+	}
+	// 周一~三逐字节等于存量（含不在库里的菜）。
+	if plan.Days[0].Lunch[0].ID != frozen.ID || plan.Days[0].Lunch[0].Name != "周一历史菜" {
+		t.Fatalf("Monday must be copied verbatim, got %+v", plan.Days[0].Lunch)
+	}
+	if len(plan.Days[1].Lunch) != 0 || len(plan.Days[2].Lunch) != 0 {
+		t.Fatalf("Tue/Wed (stored empty) must stay empty, got %+v / %+v", plan.Days[1].Lunch, plan.Days[2].Lunch)
+	}
+	// 周四起正常生成（库里有菜就该排出来）。
+	if len(plan.Days[3].Lunch)+len(plan.Days[3].Dinner) == 0 {
+		t.Fatalf("Thursday onward must be generated")
+	}
+	// 冻结菜计入周内去重：新排的天不得再出现它。
+	for i := 3; i < 7; i++ {
+		for _, dish := range appendDishSlices(plan.Days[i].Lunch, plan.Days[i].Dinner) {
+			if dish.ID == frozen.ID {
+				t.Fatalf("frozen dish leaked into generated day %d", i)
+			}
+		}
+	}
+}
+
+func TestGenerateWeekPlanKeepsManualDishes(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local)) // 周四
+
+	manual := createDishForPlanTest(t, "点名要吃", `["家常菜"]`, `[{"name":"牛腩","amount":"500g"}]`)
+	for i := 0; i < 14; i++ {
+		createDishForPlanTest(t, fmt.Sprintf("普通菜%d", i), `["家常菜"]`, `[{"name":"食材","amount":"适量"}]`)
+	}
+	storedPlan := WeekPlan{Days: []WeekDayPlan{
+		{Date: "2026-06-19", DayName: "周五",
+			Lunch:          []models.Dish{manual},
+			Dinner:         []models.Dish{},
+			ManualLunchIDs: []uint{manual.ID}},
+	}}
+	storedJSON, _ := json.Marshal(storedPlan)
+	if err := database.DB.Create(&models.WeekPlanRecord{
+		UserID: CurrentUserID, WeekStart: "2026-06-15", PlanJSON: string(storedJSON),
+	}).Error; err != nil {
+		t.Fatalf("seed week row: %v", err)
+	}
+
+	plan, err := GenerateWeekPlan()
+	if err != nil {
+		t.Fatalf("GenerateWeekPlan error = %v", err)
+	}
+	friday := plan.Days[4] // 0=周一
+	if friday.Date != "2026-06-19" {
+		t.Fatalf("day index mismatch: %s", friday.Date)
+	}
+	foundManual := false
+	for _, dish := range friday.Lunch {
+		if dish.ID == manual.ID {
+			foundManual = true
+		}
+	}
+	if !foundManual {
+		t.Fatalf("manual dish must survive full regenerate, lunch = %+v", friday.Lunch)
+	}
+	if len(friday.ManualLunchIDs) != 1 || friday.ManualLunchIDs[0] != manual.ID {
+		t.Fatalf("ManualLunchIDs must be carried, got %v", friday.ManualLunchIDs)
+	}
+}
+
+func TestRegenerateWeekPlanDayRejectsPastDate(t *testing.T) {
+	setupPlanServiceTestDB(t)
+	withPlanNow(t, time.Date(2026, 6, 18, 15, 0, 0, 0, time.Local)) // 周四
+
+	dish := createDishForPlanTest(t, "占位菜", `["家常菜"]`, `[{"name":"食材","amount":"适量"}]`)
+	storedPlan := WeekPlan{Days: []WeekDayPlan{
+		{Date: "2026-06-16", DayName: "周二", Lunch: []models.Dish{dish}, Dinner: []models.Dish{}},
+	}}
+	storedJSON, _ := json.Marshal(storedPlan)
+	if err := database.DB.Create(&models.WeekPlanRecord{
+		UserID: CurrentUserID, WeekStart: "2026-06-15", PlanJSON: string(storedJSON),
+	}).Error; err != nil {
+		t.Fatalf("seed week row: %v", err)
+	}
+
+	if _, err := RegenerateWeekPlanDay("2026-06-16"); err == nil {
+		t.Fatalf("regenerating a past day must fail")
+	} else if !strings.Contains(err.Error(), "过去的天") {
+		t.Fatalf("error = %q, want 过去的天 message", err.Error())
+	}
+}
+
 func TestSoupSchedulingRulesViaScoreEvaluation(t *testing.T) {
 	var slowSoupRule, repeatRule models.MenuRule
 	for _, rule := range models.DefaultMenuRules() {
