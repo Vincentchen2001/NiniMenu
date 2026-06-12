@@ -133,10 +133,15 @@ func TestSortTomorrowPoolPrefersFavorites(t *testing.T) {
 
 func TestPickTomorrowDishesAppliesFreshnessDecay(t *testing.T) {
 	setupPlanServiceTestDB(t)
+	// Pin the injectable clock: PickTomorrowDishes sits entirely on planNow,
+	// so fixture and pick share one instant — no midnight-crossing flake
+	// between fixture creation and the planNow() read.
+	now := time.Date(2026, 6, 8, 9, 0, 0, 0, time.UTC)
+	withPlanNow(t, now)
 	a := createDishForPlanTest(t, "明日鸡块A", "", "鸡肉")
 	b := createDishForPlanTest(t, "明日鸡块B", "", "鸡肉")
-	// A 五天前打卡（相对真实时钟；明天参照下 d=6 → 镜像扣 round(30×8/14)=17 分）
-	five := time.Now().AddDate(0, 0, -5).Format("2006-01-02")
+	// A 五天前（2026-06-03）打卡；明天（06-09）参照下 d=6 → 镜像扣 round(30×8/14)=17 分
+	five := now.AddDate(0, 0, -5).Format("2006-01-02")
 	mustCreate(t, &models.MealRecord{DishID: a.ID, DishName: a.Name, MealType: "dinner", MealDate: five})
 
 	picks, err := PickTomorrowDishes(TomorrowPickOptions{Count: 2})
