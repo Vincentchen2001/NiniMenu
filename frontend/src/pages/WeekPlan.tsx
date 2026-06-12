@@ -3,6 +3,7 @@ import { createPortal } from "react-dom"
 import { useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { dishesApi, weekPlanApi } from "@/api"
+import type { WeekPlanWeek } from "@/api"
 import type { DayOverride, Dish, DishIngredient, MealQuota, PlanProfile, WeekPlan as WeekPlanType, WeekPlanPeriodPreferences, WeekPlanPreferences } from "@/types"
 import { asArray } from "@/lib/utils"
 import { exportWeekPlanAsPng } from "@/lib/weekPlanExport"
@@ -655,6 +656,7 @@ function LoadingState() {
 export default function WeekPlan() {
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const [viewWeek, setViewWeek] = useState<WeekPlanWeek>("current")
   const [draftPlan, setDraftPlan] = useState<WeekPlanType>({ days: [] })
   const [draftPrefs, setDraftPrefs] = useState<WeekPlanPreferences>(defaultPrefs)
   const [dirtyPlan, setDirtyPlan] = useState(false)
@@ -663,14 +665,15 @@ export default function WeekPlan() {
   const [picker, setPicker] = useState<{ date: string; meal: MealType } | null>(null)
   const [themeSheet, setThemeSheet] = useState<string | null>(null)
   const [comboOpen, setComboOpen] = useState(false)
+  const [weekSwitchHint, setWeekSwitchHint] = useState(false)
 
   const { data: serverPlan, isLoading: planLoading } = useQuery({
-    queryKey: ["week-plan"],
-    queryFn: () => weekPlanApi.get(),
+    queryKey: ["week-plan", viewWeek],
+    queryFn: () => weekPlanApi.get(viewWeek),
   })
   const { data: serverPrefs, isLoading: prefsLoading } = useQuery({
-    queryKey: ["week-plan", "preferences"],
-    queryFn: () => weekPlanApi.preferences(),
+    queryKey: ["week-plan", "preferences", viewWeek],
+    queryFn: () => weekPlanApi.preferences(viewWeek),
   })
 
   useEffect(() => {
@@ -707,12 +710,12 @@ export default function WeekPlan() {
   const badges = useMemo(() => weekBadgeCounts(draftPlan), [draftPlan])
 
   const regenerateMut = useMutation({
-    mutationFn: () => weekPlanApi.regenerate(),
+    mutationFn: () => weekPlanApi.regenerate(viewWeek),
     onSuccess: (plan) => {
       const next = normalizePlan(plan)
       setDraftPlan(next)
       setDirtyPlan(false)
-      qc.setQueryData(["week-plan"], next)
+      qc.setQueryData(["week-plan", viewWeek], next)
       toast.success("已重新生成")
     },
     onError: () => toast.error("重新生成失败"),
@@ -724,7 +727,7 @@ export default function WeekPlan() {
       const next = normalizePlan(plan)
       setDraftPlan(next)
       setDirtyPlan(false)
-      qc.setQueryData(["week-plan"], next)
+      qc.setQueryData(["week-plan", viewWeek], next)
       toast.success("菜单已保存")
     },
     onError: () => toast.error("保存菜单失败"),
@@ -732,8 +735,8 @@ export default function WeekPlan() {
 
   const applyPrefsMut = useMutation({
     mutationFn: async () => {
-      const prefs = await weekPlanApi.updatePreferences(draftPrefs)
-      const plan = await weekPlanApi.regenerate()
+      const prefs = await weekPlanApi.updatePreferences(draftPrefs, viewWeek)
+      const plan = await weekPlanApi.regenerate(viewWeek)
       return { prefs, plan }
     },
     onSuccess: ({ prefs, plan }) => {
@@ -743,8 +746,8 @@ export default function WeekPlan() {
       setDraftPlan(nextPlan)
       setDirtyPrefs(false)
       setDirtyPlan(false)
-      qc.setQueryData(["week-plan", "preferences"], nextPrefs)
-      qc.setQueryData(["week-plan"], nextPlan)
+      qc.setQueryData(["week-plan", "preferences", viewWeek], nextPrefs)
+      qc.setQueryData(["week-plan", viewWeek], nextPlan)
       setSettingsOpen(false)
       toast.success("已应用设置")
     },
@@ -754,11 +757,11 @@ export default function WeekPlan() {
   const regenerateDayMut = useMutation({
     mutationFn: async (date: string) => {
       if (dirtyPrefs) {
-        const prefs = await weekPlanApi.updatePreferences(draftPrefs)
+        const prefs = await weekPlanApi.updatePreferences(draftPrefs, viewWeek)
         const nextPrefs = normalizePrefs(prefs)
         setDraftPrefs(nextPrefs)
         setDirtyPrefs(false)
-        qc.setQueryData(["week-plan", "preferences"], nextPrefs)
+        qc.setQueryData(["week-plan", "preferences", viewWeek], nextPrefs)
       }
       if (dirtyPlan) {
         // Persist manual edits first so the regeneration works off them and
@@ -767,7 +770,7 @@ export default function WeekPlan() {
         const nextPlan = normalizePlan(saved)
         setDraftPlan(nextPlan)
         setDirtyPlan(false)
-        qc.setQueryData(["week-plan"], nextPlan)
+        qc.setQueryData(["week-plan", viewWeek], nextPlan)
       }
       return weekPlanApi.regenerateDay(date)
     },
@@ -775,7 +778,7 @@ export default function WeekPlan() {
       const next = normalizePlan(plan)
       setDraftPlan(next)
       setDirtyPlan(false)
-      qc.setQueryData(["week-plan"], next)
+      qc.setQueryData(["week-plan", viewWeek], next)
       toast.success("这一天已重新生成")
     },
     onError: () => toast.error("重新生成失败"),
@@ -783,6 +786,16 @@ export default function WeekPlan() {
 
   const busy = regenerateMut.isPending || savePlanMut.isPending || applyPrefsMut.isPending || regenerateDayMut.isPending
   const loading = planLoading || prefsLoading
+
+  function switchWeek(week: WeekPlanWeek) {
+    if (week === viewWeek) return
+    if (dirtyPlan || dirtyPrefs) {
+      setWeekSwitchHint(true)
+      window.setTimeout(() => setWeekSwitchHint(false), 2800)
+      return
+    }
+    setViewWeek(week)
+  }
 
   function updateProfile(period: PeriodKey, profile: PlanProfile) {
     setDraftPrefs((prev) => normalizePrefs({
@@ -905,6 +918,8 @@ export default function WeekPlan() {
 
   if (loading && draftPlan.days.length === 0) return <LoadingState />
 
+  const nextWeekEmpty = viewWeek === "next" && !planLoading && (draftPlan?.days?.length ?? 0) === 0
+
   return (
     <div className="animate-fadeUp">
       <PageHeader
@@ -913,103 +928,149 @@ export default function WeekPlan() {
         icon={CalendarCheck}
         actions={
           <div className="flex items-center gap-2">
-            <button
-              onClick={exportPlan}
-              disabled={draftPlan.days.length === 0 || exporting}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-card text-text3 shadow-sm transition-all hover:bg-mint-light hover:text-mint active:scale-95 disabled:opacity-45"
-              aria-label="导出菜单"
-              title={exporting ? "生成中…" : "导出"}
-            >
-              <Download size={17} strokeWidth={2.35} />
-            </button>
-            <button
-              onClick={() => navigate("/admin/settings#advanced-rules")}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-card text-text3 shadow-sm transition-all hover:bg-primary-light hover:text-primary active:scale-95"
-              aria-label="打开高级推荐规则设置"
-              title="高级推荐规则"
-            >
-              <Settings2 size={17} strokeWidth={2.35} />
-            </button>
-            <button
-              onClick={() => savePlanMut.mutate()}
-              disabled={busy || !dirtyPlan}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-white shadow-sm transition-all active:scale-95 disabled:opacity-45"
-              aria-label="保存菜单"
-              title="保存"
-            >
-              <Save size={17} strokeWidth={2.35} />
-            </button>
+            {!nextWeekEmpty && (
+              <>
+                <button
+                  onClick={exportPlan}
+                  disabled={draftPlan.days.length === 0 || exporting}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-card text-text3 shadow-sm transition-all hover:bg-mint-light hover:text-mint active:scale-95 disabled:opacity-45"
+                  aria-label="导出菜单"
+                  title={exporting ? "生成中…" : "导出"}
+                >
+                  <Download size={17} strokeWidth={2.35} />
+                </button>
+                <button
+                  onClick={() => navigate("/admin/settings#advanced-rules")}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-card text-text3 shadow-sm transition-all hover:bg-primary-light hover:text-primary active:scale-95"
+                  aria-label="打开高级推荐规则设置"
+                  title="高级推荐规则"
+                >
+                  <Settings2 size={17} strokeWidth={2.35} />
+                </button>
+                <button
+                  onClick={() => savePlanMut.mutate()}
+                  disabled={busy || !dirtyPlan}
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-white shadow-sm transition-all active:scale-95 disabled:opacity-45"
+                  aria-label="保存菜单"
+                  title="保存"
+                >
+                  <Save size={17} strokeWidth={2.35} />
+                </button>
+              </>
+            )}
           </div>
         }
       />
 
       <div className="mx-auto max-w-[640px] px-5 py-4">
-        <section className="mb-4 rounded-[24px] border border-border bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={badgeClass(badges.meat === 0)}>🥩 荤 {badges.meat}</span>
-            <span className={badgeClass(badges.veg === 0)}>🥬 素 {badges.veg}</span>
-            <span className={badgeClass(badges.soup === 0)}>🍲 汤 {badges.soup}</span>
-            <span className={badgeClass(badges.favorite < FAVORITE_LOW_THRESHOLD)}>❤️ 收藏 {badges.favorite}</span>
-            <span className={`ml-auto ${badgeClass(dirtyPlan || dirtyPrefs)}`}>
-              {dirtyPlan || dirtyPrefs ? "● 未保存" : "✓ 已同步"}
-            </span>
+        <div className="mb-4">
+          <div className="inline-flex h-10 items-center gap-1 rounded-2xl border border-border bg-card p-1 shadow-[0_1px_3px_rgba(0,0,0,.035)]">
+            {(["current", "next"] as WeekPlanWeek[]).map((week) => (
+              <button
+                key={week}
+                onClick={() => switchWeek(week)}
+                className={`h-8 rounded-[14px] px-4 text-[13px] font-extrabold transition-all active:scale-95 ${
+                  viewWeek === week
+                    ? "bg-primary text-white shadow-sm"
+                    : "text-text2 hover:text-primary"
+                }`}
+              >
+                {week === "current" ? "本周" : "下周"}
+              </button>
+            ))}
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-primary-light text-sm font-extrabold text-primary transition-all active:scale-95"
-            >
-              <Settings2 size={17} strokeWidth={2.4} />
-              {dirtyPrefs ? "设置待应用" : "推荐设置"}
-            </button>
-            <button
-              onClick={() => regenerateMut.mutate()}
-              disabled={busy}
-              className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-bg text-sm font-extrabold text-text2 transition-all hover:text-primary active:scale-95 disabled:opacity-45"
-            >
-              <RefreshCw size={17} strokeWidth={2.4} className={regenerateMut.isPending ? "animate-spin" : ""} />
-              重生成
-            </button>
-          </div>
-          {draftPlan.warnings && draftPlan.warnings.length > 0 && (
-            <div className="mt-3 rounded-2xl border border-primary/20 bg-primary-light/70 px-3 py-2">
-              {draftPlan.warnings.slice(0, 3).map((warning) => (
-                <div key={warning} className="text-[11px] font-semibold leading-relaxed text-primary">{warning}</div>
-              ))}
-              {draftPlan.warnings.length > 3 && <div className="text-[11px] font-semibold text-primary/70">还有 {draftPlan.warnings.length - 3} 条提示</div>}
+          {weekSwitchHint && (
+            <div className="mt-2 text-[12px] font-semibold text-primary">
+              请先保存或放弃当前修改，再切换周
             </div>
           )}
-        </section>
-
-        <DayThemeStrip
-          days={draftPlan.days}
-          overrides={draftPrefs.days || {}}
-          defaults={{ weekday: draftPrefs.weekday.profile, weekend: draftPrefs.weekend.profile }}
-          onPick={(dayKey) => setThemeSheet(dayKey)}
-          onOpenCombos={() => setComboOpen(true)}
-        />
-
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-bg text-text3">
-              <UtensilsCrossed size={19} strokeWidth={2.35} />
-            </span>
-            <div className="min-w-0">
-              <div className="text-lg font-extrabold text-text">菜单草稿</div>
-              <div className="truncate text-[12px] font-medium text-text3">手动增删后记得保存菜单</div>
-            </div>
-          </div>
-          <button
-            onClick={() => savePlanMut.mutate()}
-            disabled={busy || !dirtyPlan}
-            className="shrink-0 rounded-full bg-primary-light px-3 py-2 text-[12px] font-extrabold text-primary transition-all active:scale-95 disabled:opacity-45"
-          >
-            保存
-          </button>
         </div>
 
+        {!nextWeekEmpty && (
+          <>
+            <section className="mb-4 rounded-[24px] border border-border bg-card p-4 shadow-[0_1px_3px_rgba(0,0,0,.035),0_8px_24px_rgba(26,26,46,.05)]">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={badgeClass(badges.meat === 0)}>🥩 荤 {badges.meat}</span>
+                <span className={badgeClass(badges.veg === 0)}>🥬 素 {badges.veg}</span>
+                <span className={badgeClass(badges.soup === 0)}>🍲 汤 {badges.soup}</span>
+                <span className={badgeClass(badges.favorite < FAVORITE_LOW_THRESHOLD)}>❤️ 收藏 {badges.favorite}</span>
+                <span className={`ml-auto ${badgeClass(dirtyPlan || dirtyPrefs)}`}>
+                  {dirtyPlan || dirtyPrefs ? "● 未保存" : "✓ 已同步"}
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-primary-light text-sm font-extrabold text-primary transition-all active:scale-95"
+                >
+                  <Settings2 size={17} strokeWidth={2.4} />
+                  {dirtyPrefs ? "设置待应用" : "推荐设置"}
+                </button>
+                <button
+                  onClick={() => regenerateMut.mutate()}
+                  disabled={busy}
+                  className="flex h-11 items-center justify-center gap-2 rounded-2xl bg-bg text-sm font-extrabold text-text2 transition-all hover:text-primary active:scale-95 disabled:opacity-45"
+                >
+                  <RefreshCw size={17} strokeWidth={2.4} className={regenerateMut.isPending ? "animate-spin" : ""} />
+                  {viewWeek === "next" ? "重新生成下周" : "重生成"}
+                </button>
+              </div>
+              {draftPlan.warnings && draftPlan.warnings.length > 0 && (
+                <div className="mt-3 rounded-2xl border border-primary/20 bg-primary-light/70 px-3 py-2">
+                  {draftPlan.warnings.slice(0, 3).map((warning) => (
+                    <div key={warning} className="text-[11px] font-semibold leading-relaxed text-primary">{warning}</div>
+                  ))}
+                  {draftPlan.warnings.length > 3 && <div className="text-[11px] font-semibold text-primary/70">还有 {draftPlan.warnings.length - 3} 条提示</div>}
+                </div>
+              )}
+            </section>
+
+            <DayThemeStrip
+              days={draftPlan.days}
+              overrides={draftPrefs.days || {}}
+              defaults={{ weekday: draftPrefs.weekday.profile, weekend: draftPrefs.weekend.profile }}
+              onPick={(dayKey) => setThemeSheet(dayKey)}
+              onOpenCombos={() => setComboOpen(true)}
+            />
+
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-bg text-text3">
+                  <UtensilsCrossed size={19} strokeWidth={2.35} />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-lg font-extrabold text-text">菜单草稿</div>
+                  <div className="truncate text-[12px] font-medium text-text3">手动增删后记得保存菜单</div>
+                </div>
+              </div>
+              <button
+                onClick={() => savePlanMut.mutate()}
+                disabled={busy || !dirtyPlan}
+                className="shrink-0 rounded-full bg-primary-light px-3 py-2 text-[12px] font-extrabold text-primary transition-all active:scale-95 disabled:opacity-45"
+              >
+                保存
+              </button>
+            </div>
+          </>
+        )}
+
         <div className="grid gap-3">
-          {draftPlan.days.length === 0 ? (
+          {nextWeekEmpty ? (
+            <section className="rounded-[24px] border border-border bg-card px-5 py-14 text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-bg text-text3">
+                <CalendarCheck size={24} strokeWidth={2.35} />
+              </div>
+              <div className="text-[15px] font-extrabold text-text">下周菜单还没生成</div>
+              <div className="mt-1.5 text-[12px] font-medium text-text3">生成后即可提前调整，周末就能照着买菜</div>
+              <button
+                onClick={() => regenerateMut.mutate()}
+                disabled={busy}
+                className="mt-5 rounded-full bg-primary px-6 py-2.5 text-sm font-extrabold text-white transition-all active:scale-95 disabled:opacity-45"
+              >
+                {regenerateMut.isPending ? "生成中…" : "生成下周菜单"}
+              </button>
+            </section>
+          ) : draftPlan.days.length === 0 ? (
             <section className="rounded-[24px] border border-border bg-card px-5 py-12 text-center">
               <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-bg text-text3">
                 <CalendarCheck size={24} strokeWidth={2.35} />

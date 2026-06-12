@@ -85,15 +85,18 @@ export const achievementsApi = {
   delete: (id: number) => api<null>("DELETE", `/achievements/${id}`),
 }
 
+export type WeekPlanWeek = "current" | "next"
+const weekQuery = (week?: WeekPlanWeek) => (week === "next" ? "?week=next" : "")
+
 export const weekPlanApi = {
-  get: () => api<WeekPlan>("GET", "/week-plan"),
+  get: (week?: WeekPlanWeek) => api<WeekPlan>("GET", `/week-plan${weekQuery(week)}`),
   save: (data: WeekPlan) => api<WeekPlan>("PUT", "/week-plan", data),
-  preferences: () => api<WeekPlanPreferences>("GET", "/week-plan/preferences"),
-  updatePreferences: (data: WeekPlanPreferences) => api<WeekPlanPreferences>("PUT", "/week-plan/preferences", data),
+  preferences: (week?: WeekPlanWeek) => api<WeekPlanPreferences>("GET", `/week-plan/preferences${weekQuery(week)}`),
+  updatePreferences: (data: WeekPlanPreferences, week?: WeekPlanWeek) => api<WeekPlanPreferences>("PUT", `/week-plan/preferences${weekQuery(week)}`, data),
   rules: () => api<MenuRule[]>("GET", "/week-plan/rules"),
   updateRules: (rules: MenuRule[]) => api<MenuRule[]>("PUT", "/week-plan/rules", { rules }),
   validateRule: (rule: MenuRule) => api<null>("POST", "/week-plan/rules/validate", rule),
-  regenerate: () => api<WeekPlan>("POST", "/week-plan/regenerate"),
+  regenerate: (week?: WeekPlanWeek) => api<WeekPlan>("POST", `/week-plan/regenerate${weekQuery(week)}`),
   regenerateDay: (date: string) => api<WeekPlan>("POST", "/week-plan/regenerate-day", { date }),
   history: (month: string) => api<Record<string, PlannedDishEntry[]>>("GET", `/week-plan/history?month=${month}`),
 }
